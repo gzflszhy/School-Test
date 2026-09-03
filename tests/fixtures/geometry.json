@@ -1,0 +1,44 @@
+[
+  {
+    "name": "large_l_0",
+    "kind": "L",
+    "x": -25,
+    "y": 25,
+    "size": 30
+  },
+  {
+    "name": "large_l_1",
+    "kind": "L",
+    "x": 25,
+    "y": -25,
+    "size": 30
+  },
+  {
+    "name": "large_l_2",
+    "kind": "L",
+    "x": -25,
+    "y": -25,
+    "size": 30
+  },
+  {
+    "name": "small_l",
+    "kind": "L",
+    "x": 33,
+    "y": 33,
+    "size": 14
+  },
+  {
+    "name": "square_0",
+    "kind": "square",
+    "x": 14,
+    "y": 36,
+    "size": 8
+  },
+  {
+    "name": "square_1",
+    "kind": "square",
+    "x": 36,
+    "y": 14,
+    "size": 8
+  }
+]
