@@ -1,3 +1,4 @@
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -83,6 +84,19 @@ void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
               << ",\"matched_large_components\":" << result.matched_large_components
               << ",\"matched_optional_components\":"
               << result.matched_optional_components
+              << ",\"optional_features\":[";
+    constexpr std::array<std::string_view, 3> optional_names{
+        "small_l", "square_0", "square_1"};
+    for (std::size_t i = 0; i < optional_names.size(); ++i) {
+        if (i != 0) std::cout << ',';
+        std::cout << "{\"name\":\"" << optional_names[i]
+                  << "\",\"found\":"
+                  << (result.optional_component_detected[i] ? "true" : "false")
+                  << ",\"center_x\":" << result.optional_component_centers[i].x
+                  << ",\"center_y\":" << result.optional_component_centers[i].y
+                  << '}';
+    }
+    std::cout << ']'
               << "}\n" << std::flush;
 }
 
@@ -104,6 +118,47 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
                                 cvRound(corners[(i + 1) % 4].y));
             cv::line(annotated, start, end,
                      cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+        }
+        if (display != nullptr) {
+            const cv::Point candidate_center(cvRound(candidate.center.x),
+                                             cvRound(candidate.center.y));
+            cv::circle(annotated, candidate_center, 2, cv::Scalar(255, 0, 255),
+                       cv::FILLED, cv::LINE_AA);
+        }
+    }
+    if (display != nullptr && debug.selected_triplet_valid) {
+        std::array<cv::Point, 3> centers{};
+        for (std::size_t i = 0; i < centers.size(); ++i) {
+            centers[i] = cv::Point(
+                cvRound(debug.selected_large_l_centers[i].x),
+                cvRound(debug.selected_large_l_centers[i].y));
+        }
+        cv::line(annotated, centers[0], centers[1], cv::Scalar(0, 255, 0), 2,
+                 cv::LINE_AA);
+        cv::line(annotated, centers[0], centers[2], cv::Scalar(0, 255, 0), 2,
+                 cv::LINE_AA);
+        cv::line(annotated, centers[1], centers[2], cv::Scalar(0, 255, 0), 2,
+                 cv::LINE_AA);
+        constexpr std::array<const char*, 3> labels{{"R", "A", "B"}};
+        for (std::size_t i = 0; i < centers.size(); ++i) {
+            cv::circle(annotated, centers[i], 5, cv::Scalar(255, 64, 64), 2,
+                       cv::LINE_AA);
+            cv::putText(annotated, labels[i], centers[i] + cv::Point(6, -6),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 64, 64), 2,
+                        cv::LINE_AA);
+        }
+    }
+    if (display != nullptr && result.found) {
+        constexpr std::array<const char*, 3> optional_labels{{"S", "Q0", "Q1"}};
+        for (std::size_t i = 0; i < optional_labels.size(); ++i) {
+            if (!result.optional_component_detected[i]) continue;
+            const cv::Point center(cvRound(result.optional_component_centers[i].x),
+                                   cvRound(result.optional_component_centers[i].y));
+            cv::drawMarker(annotated, center, cv::Scalar(64, 128, 255),
+                           cv::MARKER_TILTED_CROSS, 10, 2);
+            cv::putText(annotated, optional_labels[i], center + cv::Point(5, 12),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(64, 128, 255), 1,
+                        cv::LINE_AA);
         }
     }
     if (result.found) {
@@ -170,6 +225,7 @@ int run(const RuntimeOptions& options) {
     MaixCameraSource camera(camera_config);
     MarkerDetector detector(detector_config);
     detector.setDebugEnabled(options.debug);
+    detector.setDebugCenterOverlayEnabled(options.debug_display);
     std::unique_ptr<maix::display::Display> display;
     if (options.debug_display) {
         display = std::make_unique<maix::display::Display>();

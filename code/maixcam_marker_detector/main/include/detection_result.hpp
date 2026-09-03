@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -35,6 +36,10 @@ struct DetectionResult {
     int matched_components = 0;
     int matched_large_components = 0;
     int matched_optional_components = 0;
+    std::array<bool, 3> optional_component_detected{};
+    std::array<cv::Point2f, 3> optional_component_centers{
+        cv::Point2f{-1.0F, -1.0F}, cv::Point2f{-1.0F, -1.0F},
+        cv::Point2f{-1.0F, -1.0F}};
 };
 
 constexpr std::string_view toString(DetectionQuality value) noexcept {

@@ -21,6 +21,8 @@ struct TemplateScore {
     int matched_components = 0;
     int matched_large_components = 0;
     std::array<float, MarkerGeometry::kComponentCount> coverage{};
+    std::array<bool, MarkerGeometry::kComponentCount> component_detected{};
+    std::array<cv::Point2f, MarkerGeometry::kComponentCount> component_centers_canonical{};
 };
 
 class MarkerTemplate {

@@ -71,9 +71,11 @@ struct DetectorConfig {
     // L has a 30 mm outer size, giving 50/30 = 1.6667.
     float expected_leg_scale = 1.6667F;
     float leg_scale_tolerance = 0.60F;
-    float leg_similarity_tolerance = 0.45F;
-    float right_angle_cosine_max = 0.42F;
-    float pythagorean_relative_error_max = 0.40F;
+    // Perspective and motion blur need margin, while these bounds still
+    // reject visibly non-isosceles/non-right triples.
+    float leg_similarity_tolerance = 0.35F;
+    float right_angle_cosine_max = 0.35F;
+    float pythagorean_relative_error_max = 0.30F;
     float component_scale_ratio_max = 2.20F;
     float component_intensity_delta_max = 120.0F;
     float topology_shape_subweight = 0.22F;
@@ -98,9 +100,9 @@ struct DetectorConfig {
     // Acceptance uses only the three large Ls: topology + large-L template +
     // contrast. Optional small marks/board can raise reported confidence but
     // can never turn a rejected large-L triple into an accepted detection.
-    float topology_weight = 0.55F;
-    float template_weight = 0.30F;
-    float contrast_weight = 0.15F;
+    float topology_weight = 0.70F;
+    float template_weight = 0.20F;
+    float contrast_weight = 0.10F;
     float optional_evidence_weight = 0.05F;
     float black_board_weight = 0.10F;
     float temporal_weight = 0.10F;

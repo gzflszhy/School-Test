@@ -20,6 +20,8 @@ struct DetectorDebugSnapshot {
     int raw_contour_count = 0;
     cv::Mat led_mask;
     std::vector<cv::RotatedRect> candidates;
+    bool selected_triplet_valid = false;
+    std::array<cv::Point2f, 3> selected_large_l_centers{};
 };
 
 class MarkerDetector {
@@ -37,6 +39,9 @@ public:
     DetectorState state() const noexcept { return state_.mode; }
     const BenchmarkAccumulator& benchmark() const noexcept { return benchmark_; }
     void setDebugEnabled(bool enabled) noexcept { debug_enabled_ = enabled; }
+    void setDebugCenterOverlayEnabled(bool enabled) noexcept {
+        debug_center_overlay_enabled_ = enabled;
+    }
     const DetectorDebugSnapshot& debugSnapshot() const noexcept { return debug_snapshot_; }
 
 private:
@@ -61,6 +66,10 @@ private:
         cv::RotatedRect rotated_board{};
         cv::Rect2f bbox{};
         cv::Point2f center{};
+        bool large_l_triplet_valid = false;
+        std::array<cv::Point2f, 3> large_l_centers{};
+        std::array<bool, 3> optional_component_detected{};
+        std::array<cv::Point2f, 3> optional_component_centers{};
         MarkerOrientation orientation = MarkerOrientation::UNKNOWN;
         TemplateScore detail{};
         HypothesisPath path = HypothesisPath::LED_TRIPLE;
@@ -110,6 +119,7 @@ private:
     std::vector<cv::Point2f> board_corner_buffer_;
     std::vector<TripleProposal> triple_proposals_;
     bool debug_enabled_ = false;
+    bool debug_center_overlay_enabled_ = false;
     DetectorDebugSnapshot debug_snapshot_;
     SteadyTimePoint previous_output_{};
 };

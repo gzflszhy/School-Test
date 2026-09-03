@@ -141,7 +141,8 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
     for (std::size_t i = 0; i < component_masks_.size(); ++i) {
         cv::bitwise_and(scratch_binary, component_masks_[i], overlap_scratch_);
         const int expected = component_pixel_counts_[i];
-        const float coverage = static_cast<float>(cv::countNonZero(overlap_scratch_)) /
+        const int observed_pixels = cv::countNonZero(overlap_scratch_);
+        const float coverage = static_cast<float>(observed_pixels) /
                                static_cast<float>(expected);
         result.coverage[i] = coverage;
         const bool is_large = geometry_.components()[i].kind == ComponentKind::LARGE_L;
@@ -150,6 +151,13 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
         if (coverage >= required) {
             ++result.matched_components;
             if (is_large) ++result.matched_large_components;
+            result.component_detected[i] = true;
+            const cv::Moments moments = cv::moments(overlap_scratch_, true);
+            if (moments.m00 > 0.0) {
+                result.component_centers_canonical[i] = {
+                    static_cast<float>(moments.m10 / moments.m00),
+                    static_cast<float>(moments.m01 / moments.m00)};
+            }
         }
         const float weight = is_large ? config_.large_template_coverage_weight : 1.0F;
         const float normalized_coverage = clamp01(coverage / std::max(0.01F, required));
