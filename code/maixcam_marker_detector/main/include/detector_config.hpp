@@ -49,14 +49,14 @@ struct DetectorConfig {
     int morphology_kernel = 3;
 
     // Large-L contour filtering and scoring.
-    float component_aspect_min = 0.55F;
-    float component_aspect_max = 1.80F;
-    float component_fill_min = 0.20F;
-    float component_fill_max = 0.82F;
-    float component_solidity_min = 0.45F;
-    float component_solidity_max = 0.96F;
-    float max_shape_distance = 1.20F;
-    float min_component_score = 0.24F;
+    float component_aspect_min = 0.45F;
+    float component_aspect_max = 2.20F;
+    float component_fill_min = 0.12F;
+    float component_fill_max = 0.94F;
+    float component_solidity_min = 0.35F;
+    float component_solidity_max = 0.99F;
+    float max_shape_distance = 1.60F;
+    float min_component_score = 0.16F;
     float component_fill_target = 0.46F;
     float component_fill_score_tolerance = 0.36F;
     float component_concavity_score_span = 0.30F;
@@ -70,12 +70,12 @@ struct DetectorConfig {
     // CAD: adjacent large-L bounding-box centres are 50 mm apart while each
     // L has a 30 mm outer size, giving 50/30 = 1.6667.
     float expected_leg_scale = 1.6667F;
-    float leg_scale_tolerance = 0.45F;
-    float leg_similarity_tolerance = 0.35F;
-    float right_angle_cosine_max = 0.32F;
-    float pythagorean_relative_error_max = 0.28F;
-    float component_scale_ratio_max = 1.85F;
-    float component_intensity_delta_max = 80.0F;
+    float leg_scale_tolerance = 0.60F;
+    float leg_similarity_tolerance = 0.45F;
+    float right_angle_cosine_max = 0.42F;
+    float pythagorean_relative_error_max = 0.40F;
+    float component_scale_ratio_max = 2.20F;
+    float component_intensity_delta_max = 120.0F;
     float topology_shape_subweight = 0.22F;
     float topology_angle_subweight = 0.25F;
     float topology_leg_similarity_subweight = 0.18F;
@@ -111,15 +111,15 @@ struct DetectorConfig {
     float search_strong_threshold = 0.66F;
     float track_hold_threshold = 0.50F;
     float track_exit_threshold = 0.40F;
-    float tracking_roi_scale = 1.75F;
-    float tracking_roi_lost_scale = 2.35F;
+    float tracking_roi_scale = 2.10F;
+    float tracking_roi_lost_scale = 3.00F;
     float max_tracking_displacement_bbox = 1.50F;
     float prediction_horizon_seconds = 0.25F;
     float velocity_update_max_dt_seconds = 0.50F;
     float previous_velocity_weight = 0.55F;
     int search_confirm_frames = 2;
-    int expand_after_lost_frames = 2;
-    int return_to_search_lost_frames = 3;
+    int expand_after_lost_frames = 1;
+    int return_to_search_lost_frames = 6;
 
     // Dark-board fallback.
     int dark_board_max_threshold = 100;

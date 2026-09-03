@@ -169,10 +169,18 @@ int MarkerDetector::makeLedMask(const cv::Rect& roi) {
 
 std::vector<MarkerDetector::LedCandidate> MarkerDetector::findLedCandidates(
     const cv::Rect& roi) {
-    makeLedMask(roi);
+    const int led_threshold = makeLedMask(roi);
+    if (debug_enabled_) {
+        debug_snapshot_.search_roi = roi;
+        debug_snapshot_.led_threshold = led_threshold;
+        roi_binary_.copyTo(debug_snapshot_.led_mask);
+    }
     contour_buffer_.clear();
     cv::findContours(roi_binary_, contour_buffer_, cv::RETR_EXTERNAL,
                      cv::CHAIN_APPROX_SIMPLE, roi.tl());
+    if (debug_enabled_) {
+        debug_snapshot_.raw_contour_count = static_cast<int>(contour_buffer_.size());
+    }
 
     struct PreCandidate {
         std::size_t contour_index;
@@ -265,6 +273,13 @@ std::vector<MarkerDetector::LedCandidate> MarkerDetector::findLedCandidates(
         std::min(config_.max_led_candidates, config_.max_topology_candidates));
     if (result.size() > final_candidate_limit) {
         result.resize(final_candidate_limit);
+    }
+    if (debug_enabled_) {
+        debug_snapshot_.candidates.clear();
+        debug_snapshot_.candidates.reserve(result.size());
+        for (const auto& candidate : result) {
+            debug_snapshot_.candidates.push_back(candidate.box);
+        }
     }
     // Build an intensity mask only for the final bounded candidate set. Both
     // Mat storage and point-vector capacity are reused across candidates.
@@ -709,6 +724,13 @@ void MarkerDetector::updateState(const DetectionResult& result,
 DetectionResult MarkerDetector::process(const cv::Mat& frame,
                                         SteadyTimePoint capture_timestamp) {
     const SteadyTimePoint processing_start = std::chrono::steady_clock::now();
+    if (debug_enabled_) {
+        debug_snapshot_.search_roi = {};
+        debug_snapshot_.led_threshold = 0;
+        debug_snapshot_.raw_contour_count = 0;
+        debug_snapshot_.led_mask.release();
+        debug_snapshot_.candidates.clear();
+    }
     makeGray(frame);
     Hypothesis best;
     float confidence = 0.0F;

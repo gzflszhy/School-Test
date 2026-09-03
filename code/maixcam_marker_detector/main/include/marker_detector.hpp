@@ -14,6 +14,14 @@
 
 namespace maixcam_marker {
 
+struct DetectorDebugSnapshot {
+    cv::Rect search_roi{};
+    int led_threshold = 0;
+    int raw_contour_count = 0;
+    cv::Mat led_mask;
+    std::vector<cv::RotatedRect> candidates;
+};
+
 class MarkerDetector {
 public:
     explicit MarkerDetector(DetectorConfig config = DetectorConfig{});
@@ -28,6 +36,8 @@ public:
     const DetectorStateData& stateData() const noexcept { return state_; }
     DetectorState state() const noexcept { return state_.mode; }
     const BenchmarkAccumulator& benchmark() const noexcept { return benchmark_; }
+    void setDebugEnabled(bool enabled) noexcept { debug_enabled_ = enabled; }
+    const DetectorDebugSnapshot& debugSnapshot() const noexcept { return debug_snapshot_; }
 
 private:
     enum class HypothesisPath { LED_TRIPLE, DARK_BOARD };
@@ -97,6 +107,8 @@ private:
     std::vector<cv::Point> local_contour_buffer_;
     std::vector<cv::Point2f> board_corner_buffer_;
     std::vector<TripleProposal> triple_proposals_;
+    bool debug_enabled_ = false;
+    DetectorDebugSnapshot debug_snapshot_;
     SteadyTimePoint previous_output_{};
 };
 

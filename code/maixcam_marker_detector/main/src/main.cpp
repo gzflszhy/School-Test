@@ -1,10 +1,19 @@
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "maix_basic.hpp"
+#include "maix_display.hpp"
+#include "maix_image.hpp"
+
+#include <opencv2/imgproc.hpp>
 
 #include "detector_config.hpp"
 #include "maix_camera_source.hpp"
@@ -13,6 +22,32 @@
 namespace {
 
 using namespace maixcam_marker;
+
+struct RuntimeOptions {
+    bool debug = false;
+    bool debug_display = false;
+};
+
+RuntimeOptions parseOptions(int argc, char** argv) {
+    RuntimeOptions options;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view argument(argv[i]);
+        if (argument == "--debug") {
+            options.debug = true;
+        } else if (argument == "--debug-display") {
+            options.debug = true;
+            options.debug_display = true;
+        } else if (argument == "--help") {
+            std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display]\n"
+                         "  --debug          stream annotated frames to MaixVision\n"
+                         "  --debug-display  show on the device display and MaixVision\n";
+            std::exit(0);
+        } else {
+            throw std::runtime_error("unknown argument: " + std::string(argument));
+        }
+    }
+    return options;
+}
 
 std::int64_t steadyMicros(SteadyTimePoint timestamp) {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -48,7 +83,72 @@ void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
               << "}\n" << std::flush;
 }
 
-int run() {
+void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
+                    const DetectorDebugSnapshot& debug,
+                    maix::display::Display* display) {
+    cv::Mat annotated;
+    cv::cvtColor(gray, annotated, cv::COLOR_GRAY2RGB);
+
+    if (debug.search_roi.area() > 0) {
+        cv::rectangle(annotated, debug.search_roi, cv::Scalar(255, 255, 0), 1);
+    }
+    for (const auto& candidate : debug.candidates) {
+        cv::Point2f corners[4];
+        candidate.points(corners);
+        for (int i = 0; i < 4; ++i) {
+            const cv::Point start(cvRound(corners[i].x), cvRound(corners[i].y));
+            const cv::Point end(cvRound(corners[(i + 1) % 4].x),
+                                cvRound(corners[(i + 1) % 4].y));
+            cv::line(annotated, start, end,
+                     cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+        }
+    }
+    if (result.found) {
+        const cv::Rect detected_box(cvRound(result.bbox.x), cvRound(result.bbox.y),
+                                    cvRound(result.bbox.width), cvRound(result.bbox.height));
+        const cv::Point detected_center(cvRound(result.center.x), cvRound(result.center.y));
+        cv::rectangle(annotated, detected_box, cv::Scalar(0, 255, 0), 2);
+        cv::drawMarker(annotated, detected_center, cv::Scalar(0, 255, 0),
+                       cv::MARKER_CROSS, 14, 2);
+    }
+
+    std::ostringstream status;
+    status << (result.found ? "FOUND " : "LOST ") << toString(result.quality)
+           << " conf=" << static_cast<int>(result.confidence * 100.0F)
+           << "% cand=" << debug.candidates.size()
+           << "/" << debug.raw_contour_count
+           << " thr=" << debug.led_threshold
+           << " fps=" << static_cast<int>(result.effective_detection_fps + 0.5);
+    cv::rectangle(annotated, cv::Rect(0, 0, annotated.cols, 24),
+                  cv::Scalar(0, 0, 0), cv::FILLED);
+    cv::putText(annotated, status.str(), cv::Point(5, 17),
+                cv::FONT_HERSHEY_SIMPLEX, 0.43, cv::Scalar(255, 255, 255), 1,
+                cv::LINE_AA);
+
+    cv::Mat full_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
+    if (!debug.led_mask.empty() && debug.search_roi.area() > 0 &&
+        debug.led_mask.size() == debug.search_roi.size()) {
+        debug.led_mask.copyTo(full_mask(debug.search_roi));
+    }
+    cv::Mat mask_rgb;
+    cv::cvtColor(full_mask, mask_rgb, cv::COLOR_GRAY2RGB);
+    cv::putText(mask_rgb, "LED threshold mask", cv::Point(5, 17),
+                cv::FONT_HERSHEY_SIMPLEX, 0.43, cv::Scalar(255, 255, 0), 1,
+                cv::LINE_AA);
+
+    cv::Mat canvas;
+    cv::hconcat(annotated, mask_rgb, canvas);
+    maix::image::Image image(canvas.cols, canvas.rows,
+                             maix::image::Format::FMT_RGB888, canvas.data,
+                             static_cast<int>(canvas.total() * canvas.elemSize()), false);
+    if (display != nullptr) {
+        display->show(image, maix::image::Fit::FIT_CONTAIN);
+    } else {
+        maix::display::send_to_maixvision(image);
+    }
+}
+
+int run(const RuntimeOptions& options) {
     DetectorConfig detector_config;
     detector_config.normalize();
 
@@ -64,6 +164,11 @@ int run() {
 
     MaixCameraSource camera(camera_config);
     MarkerDetector detector(detector_config);
+    detector.setDebugEnabled(options.debug);
+    std::unique_ptr<maix::display::Display> display;
+    if (options.debug_display) {
+        display = std::make_unique<maix::display::Display>();
+    }
     CameraFrame frame;
     std::uint64_t consecutive_empty_reads = 0;
 
@@ -88,6 +193,9 @@ int run() {
         // frame owns the MaixCDK Image backing frame.gray().  process must
         // complete before the next read replaces (and releases) that image.
         const DetectionResult result = detector.process(frame.gray(), frame.capture_time());
+        if (options.debug) {
+            showDebugFrame(frame.gray(), result, detector.debugSnapshot(), display.get());
+        }
         writeJsonl(result, frame.sequence());
     }
 
@@ -97,10 +205,10 @@ int run() {
 
 }  // namespace
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
     maix::sys::register_default_signal_handle();
     try {
-        return run();
+        return run(parseOptions(argc, argv));
     } catch (const std::exception& error) {
         std::cerr << "fatal: " << error.what() << '\n';
         return 1;
