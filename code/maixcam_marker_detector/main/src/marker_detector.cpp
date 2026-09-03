@@ -358,7 +358,7 @@ bool MarkerDetector::makeTripleProposal(const LedCandidate& a, const LedCandidat
     for (int i = 0; i < 3; ++i) {
         const cv::Point2f u = candidates[(i + 1) % 3]->center - candidates[i]->center;
         const cv::Point2f v = candidates[(i + 2) % 3]->center - candidates[i]->center;
-        const float denominator = std::max(1e-3F, cv::norm(u) * cv::norm(v));
+        const float denominator = static_cast<float>(std::max(1e-3, cv::norm(u) * cv::norm(v)));
         const float abs_cosine = std::abs(u.dot(v) / denominator);
         if (abs_cosine < best_abs_cosine) {
             best_abs_cosine = abs_cosine;

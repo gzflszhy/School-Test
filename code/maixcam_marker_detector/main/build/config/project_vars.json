@@ -1,0 +1,15 @@
+{
+    "PROJECT_ID": "main",
+    "SDK_PATH": "/home/robomaster/MaixCDK",
+    "PROJECT_PATH": "/home/robomaster/school_test/School-Test/code/maixcam_marker_detector/main",
+    "MAIXCDK_EXTRA_COMPONENTS_PATH": "",
+    "PY_PKG_COMPONENTS_PATH": "/home/robomaster/MaixCDK/.venv/lib/python3.14/site-packages",
+    "PY_USR_PKG_COMPONENTS_PATH": "",
+    "CMAKE_BUILD_TYPE": "MinSizeRel",
+    "BUILD_TYPE": "Release",
+    "PLATFORM": "maixcam",
+    "CMAKE_GENERATOR": "",
+    "TOOLCHAIN_ID": "",
+    "DEFAULT_CONFIG_FILE": "",
+    "PLATFORM_MAIXCAM": 1
+}

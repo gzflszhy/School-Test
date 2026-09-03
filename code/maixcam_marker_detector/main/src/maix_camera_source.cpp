@@ -118,7 +118,7 @@ bool MaixCameraSource::read(CameraFrame& frame) {
 
     if (image->format() != maix::image::Format::FMT_GRAYSCALE || image->data() == nullptr ||
         image->width() != config_.width || image->height() != config_.height ||
-        image->data_size() < static_cast<std::size_t>(config_.width * config_.height)) {
+        image->data_size() < config_.width * config_.height) {
         delete image;
         last_error_ = "camera did not return the requested contiguous grayscale frame";
         return false;
