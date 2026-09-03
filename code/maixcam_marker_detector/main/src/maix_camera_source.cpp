@@ -71,9 +71,9 @@ MaixCameraSource::MaixCameraSource(CameraConfig config) : config_(config) {
         throw std::runtime_error("MaixCDK could not open the requested camera");
     }
 
-    const maix::camera::AeMode requested_ae_mode = config_.use_auto_exposure
-        ? maix::camera::AeMode::Auto
-        : maix::camera::AeMode::Manual;
+    // MaixCDK 4.10.3 uses the legacy integer exposure-mode API:
+    // 0 = auto exposure, 1 = manual exposure.
+    const int requested_ae_mode = config_.use_auto_exposure ? 0 : 1;
     if (impl_->camera->exp_mode(requested_ae_mode) != requested_ae_mode) {
         throw std::runtime_error("MaixCDK could not set the requested exposure mode");
     }
@@ -103,13 +103,16 @@ bool MaixCameraSource::read(CameraFrame& frame) {
         return false;
     }
 
-    if (config_.prefer_latest_frame) {
+    // MaixCDK 4.10.3 reports clear_buff() as unsupported for the default
+    // single-buffer GC4653 channel. With one buffer there is no queued backlog
+    // to drain, so only request a flush when multiple buffers are configured.
+    if (config_.prefer_latest_frame && config_.buffer_count > 1) {
         impl_->camera->clear_buff();
     }
 
     // Use the documented blocking default rather than a very short timeout:
     // MaixCDK cautions that a low block_ms may duplicate MaixCam frames.
-    maix::image::Image* image = impl_->camera->read(true, -1);
+    maix::image::Image* image = impl_->camera->read(nullptr, 0, true, -1);
     const auto captured_at = std::chrono::steady_clock::now();
     if (image == nullptr) {
         last_error_ = "MaixCDK Camera::read returned no image";

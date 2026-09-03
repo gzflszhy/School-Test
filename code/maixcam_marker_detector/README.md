@@ -4,13 +4,27 @@
 
 ## 运行基线
 
-- 请求 GC4653 `640x360 @ 60 FPS`、`FMT_GRAYSCALE`、`buff_num=1`；
+- 请求 GC4653 `480x270 @ 60 FPS`、`FMT_GRAYSCALE`、`buff_num=1`；底层 ISP
+  仍可选择 GC4653 的 `1280x720 @ 60 FPS` 模式并缩放输出；
 - 启动后默认丢弃 30 帧，以便自动曝光稳定；手动曝光时，使用配置中的
   `exposure_us`（微秒）后再开始预热；
-- 每次读取前调用 `Camera::clear_buff()`，优先新鲜帧而非处理积压帧；
+- 单缓冲模式不调用 `Camera::clear_buff()`；MaixCDK 4.10.3 的 GC4653
+  单缓冲通道会报告该操作不受支持；
 - 相机返回的灰度缓冲区通过 `cv::Mat` 零拷贝封装，并由 `CameraFrame` 维持其生命周期。检测器必须在该 `CameraFrame` 仍存在时完成 `process()`。
 
 `capture_timestamp_us` 是 `Camera::read()` 成功返回时记录的 host `steady_clock` 单调时间；目前 MaixCDK `Image` API 未提供传感器曝光时间戳，不能把它解释为曝光起点。`output_timestamp_us` 为结果序列化前的同一时钟时间，二者差值是本程序可测的 capture-to-output 时延。
+
+## 固定兼容版本
+
+本项目以 MaixCAM-Pro 系统 `maixcam-pro-2025-03-19-maixpy-v4.10.3`
+为当前实机兼容基线。必须使用对应的 MaixCDK commit：
+
+```text
+0beaac9d3dd06248bad5259935f5110e261dd447
+```
+
+不要直接使用 MaixCDK `main` 分支编译后部署到该固件，否则可能出现
+`libmaixcam_lib.so` 符号不匹配。
 
 ## MaixCDK 构建与部署
 
@@ -19,14 +33,59 @@
 项目只请求官方 API 已公开的调用：
 
 ```cpp
-maix::camera::Camera camera(640, 360, maix::image::FMT_GRAYSCALE,
+maix::camera::Camera camera(480, 270, maix::image::FMT_GRAYSCALE,
                             nullptr, 60.0, 1, true, false);
+camera.exp_mode(0); // MaixCDK 4.10.3: 0=auto, 1=manual
 camera.skip_frames(30);
-maix::image::Image *image = camera.read(true, -1);
+maix::image::Image *image = camera.read(nullptr, 0, true, -1);
 // use image->data() while image is alive, then delete image
 ```
 
 不要使用 `cv::VideoCapture`。不要加 `display` 依赖。实机如发现 60 FPS 不稳定，可先把 `buff_num` 调为 2；这会改变时延，必须重新记录 benchmark。
+
+### 在 WSL 中从零构建
+
+建议使用 WSL2 Ubuntu 20.04 或更高版本。完整流程：
+
+```bash
+sudo apt update
+sudo apt install -y git cmake build-essential python3 python3-pip autoconf automake libtool
+
+cd ~
+git clone https://github.com/Sipeed/MaixCDK.git
+cd MaixCDK
+git checkout --detach 0beaac9d3dd06248bad5259935f5110e261dd447
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -U pip
+python3 -m pip install -U -r requirements.txt
+python3 -m pip install --force-reinstall "cmake>=3.13,<4"
+
+cp -a /path/to/repository/code/maixcam_marker_detector projects/
+cd projects/maixcam_marker_detector
+maixcdk menuconfig
+# 选择 maixcam，保存退出
+maixcdk build
+```
+
+首次部署前将可执行文件和完整依赖目录上传到设备，不能只上传可执行文件：
+
+```bash
+ssh root@DEVICE_IP "mkdir -p /root/maixcam_marker_test/dl_lib"
+scp build/maixcam_marker_detector root@DEVICE_IP:/root/maixcam_marker_test/
+scp -r build/dl_lib/. root@DEVICE_IP:/root/maixcam_marker_test/dl_lib/
+```
+
+在 MaixCAM-Pro 上运行：
+
+```bash
+killall launcher_daemon
+cd /root/maixcam_marker_test
+chmod +x maixcam_marker_detector
+export LD_LIBRARY_PATH="$PWD/dl_lib:/mnt/system/lib:/mnt/system/usr/lib:/mnt/system/usr/lib/3rd:/lib:/usr/lib"
+ldd ./maixcam_marker_detector
+./maixcam_marker_detector
+```
 
 ## 输出与控制面约定
 

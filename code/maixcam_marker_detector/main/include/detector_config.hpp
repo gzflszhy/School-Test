@@ -7,12 +7,14 @@
 namespace maixcam_marker {
 
 // All tunable values live here so field calibration never requires changing
-// the detector implementation. Pixel limits refer to the 640x360 input image.
+// the detector implementation. Pixel limits refer to the 480x270 input image.
 struct DetectorConfig {
     static constexpr int kMaxTotalTransformEvaluations = 10;
 
-    int frame_width = 640;
-    int frame_height = 360;
+    // GC4653 is sampled at 720p/60 by the ISP and scaled to this lower-cost
+    // detector stream. The target is expected to remain reasonably close.
+    int frame_width = 480;
+    int frame_height = 270;
     int requested_fps = 60;
     int camera_buffer_count = 1;
     int camera_warmup_frames = 30;
@@ -21,17 +23,17 @@ struct DetectorConfig {
     float analogue_gain = 1.0F;
     float digital_gain = 1.0F;
 
-    int min_marker_width_px = 38;
-    int max_marker_width_px = 280;
-    int min_component_size_px = 3;
-    int max_component_size_px = 90;
-    int min_component_area_px = 12;
-    int max_component_area_px = 5000;
+    int min_marker_width_px = 28;
+    int max_marker_width_px = 210;
+    int min_component_size_px = 2;
+    int max_component_size_px = 68;
+    int min_component_area_px = 7;
+    int max_component_area_px = 2813;
     int max_led_candidates = 14;
     int max_topology_candidates = 9;
     // Only this many contours reach convexHull/matchShapes.
     int max_pre_shape_candidates = 18;
-    // Full 160x160 warp/template evaluations. normalize() enforces the
+    // Full 128x128 warp/template evaluations. normalize() enforces the
     // non-overridable total cap kMaxTotalTransformEvaluations; the default
     // split is 6 LED + 4 board.
     int max_led_transform_evaluations = 6;
@@ -80,7 +82,7 @@ struct DetectorConfig {
     float topology_pythagorean_subweight = 0.18F;
     float topology_scale_subweight = 0.17F;
 
-    int canonical_size = 160;
+    int canonical_size = 128;
     int template_dilate_px = 2;
     float min_large_component_coverage = 0.42F;
     float min_small_component_coverage = 0.30F;
@@ -139,8 +141,8 @@ struct DetectorConfig {
     float fallback_board_rectangularity_weight = 0.60F;
     float fallback_board_bright_range_weight = 0.40F;
 
-    float optical_center_x = 320.0F;
-    float optical_center_y = 180.0F;
+    float optical_center_x = 240.0F;
+    float optical_center_y = 135.0F;
     bool benchmark_enabled = true;
     bool debug_enabled = false;
     bool failure_recorder_enabled = false;

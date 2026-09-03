@@ -14,8 +14,8 @@ namespace maixcam_marker {
  * usable with recorded OpenCV frames and knows nothing about MaixCDK.
  */
 struct CameraConfig {
-    int width = 640;
-    int height = 360;
+    int width = 480;
+    int height = 270;
     double fps = 60.0;
     int buffer_count = 1;
     int warmup_frames = 30;
