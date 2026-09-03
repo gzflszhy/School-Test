@@ -54,6 +54,7 @@ private:
     struct Hypothesis {
         bool valid = false;
         float topology_score = 0.0F;
+        float acceptance_score = 0.0F;
         float total_score = 0.0F;
         cv::Matx23f image_to_canonical{};
         cv::Matx23f canonical_to_image{};
@@ -87,6 +88,7 @@ private:
     float temporalScore(const Hypothesis& hypothesis,
                         SteadyTimePoint capture_timestamp) const;
     DetectionResult makeResult(const Hypothesis& hypothesis, float confidence,
+                               float acceptance_confidence,
                                SteadyTimePoint capture_timestamp);
     void updateState(const DetectionResult& result, SteadyTimePoint capture_timestamp);
 

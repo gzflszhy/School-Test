@@ -36,6 +36,7 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
     config_.normalize();
     const cv::Size canvas(config_.canonical_size, config_.canonical_size);
     led_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
+    large_l_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
     board_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
     const auto board_corners = geometry_.boardCornersCanonical(config_.canonical_size);
     std::vector<cv::Point> board_polygon;
@@ -72,6 +73,11 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
                                                          cv::Size(diameter, diameter));
         cv::dilate(led_mask_, led_mask_, kernel);
         for (auto& mask : component_masks_) cv::dilate(mask, mask, kernel);
+    }
+    for (std::size_t i = 0; i < component_masks_.size(); ++i) {
+        if (components[i].kind == ComponentKind::LARGE_L) {
+            cv::bitwise_or(large_l_mask_, component_masks_[i], large_l_mask_);
+        }
     }
     board_mask_.setTo(0, led_mask_);
     for (std::size_t i = 0; i < component_masks_.size(); ++i) {
@@ -128,6 +134,10 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
 
     float weighted_coverage = 0.0F;
     float weight_sum = 0.0F;
+    float large_coverage = 0.0F;
+    float optional_coverage = 0.0F;
+    int large_count = 0;
+    int optional_count = 0;
     for (std::size_t i = 0; i < component_masks_.size(); ++i) {
         cv::bitwise_and(scratch_binary, component_masks_[i], overlap_scratch_);
         const int expected = component_pixel_counts_[i];
@@ -142,12 +152,26 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
             if (is_large) ++result.matched_large_components;
         }
         const float weight = is_large ? config_.large_template_coverage_weight : 1.0F;
-        weighted_coverage += weight * clamp01(coverage / std::max(0.01F, required));
+        const float normalized_coverage = clamp01(coverage / std::max(0.01F, required));
+        weighted_coverage += weight * normalized_coverage;
         weight_sum += weight;
+        if (is_large) {
+            large_coverage += normalized_coverage;
+            ++large_count;
+        } else {
+            optional_coverage += normalized_coverage;
+            ++optional_count;
+        }
     }
     result.template_score = weight_sum > 0.0F ? weighted_coverage / weight_sum : 0.0F;
+    result.large_l_template_score = large_count > 0
+        ? large_coverage / static_cast<float>(large_count) : 0.0F;
+    result.optional_template_score = optional_count > 0
+        ? optional_coverage / static_cast<float>(optional_count) : 0.0F;
 
-    const double led_mean = cv::mean(canonical_gray, led_mask_)[0];
+    // Primary contrast must depend only on the three required large Ls. The
+    // optional code marks may be off, occluded or outside their ideal masks.
+    const double led_mean = cv::mean(canonical_gray, large_l_mask_)[0];
     const double board_mean = board_mean_scalar[0];
     result.contrast_score = clamp01(static_cast<float>(led_mean - board_mean) /
                                     std::max(1.0F, config_.contrast_score_full_scale *

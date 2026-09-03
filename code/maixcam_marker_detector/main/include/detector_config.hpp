@@ -89,17 +89,19 @@ struct DetectorConfig {
     float max_extra_bright_fraction = 0.38F;
     float min_led_board_contrast = 18.0F;
     float min_black_board_fraction = 0.30F;
-    float min_black_board_validation_score = 0.30F;
-    int min_additional_led_components = 1;
     float contrast_score_full_scale = 3.0F;
     float large_template_coverage_weight = 2.0F;
     float min_detection_contrast_score = 0.12F;
     float hypothesis_max_width_factor = 1.35F;
     float extra_bright_reject_factor = 1.80F;
 
-    float topology_weight = 0.40F;
-    float template_weight = 0.25F;
+    // Acceptance uses only the three large Ls: topology + large-L template +
+    // contrast. Optional small marks/board can raise reported confidence but
+    // can never turn a rejected large-L triple into an accepted detection.
+    float topology_weight = 0.55F;
+    float template_weight = 0.30F;
     float contrast_weight = 0.15F;
+    float optional_evidence_weight = 0.05F;
     float black_board_weight = 0.10F;
     float temporal_weight = 0.10F;
     float no_history_temporal_score = 0.50F;
@@ -130,8 +132,8 @@ struct DetectorConfig {
     float fallback_topology_score = 0.45F;
     int max_board_candidates = 6;
     int max_board_transform_evaluations = 4;
-    int fallback_min_large_components = 2;
-    int fallback_min_total_components = 4;
+    int fallback_min_large_components = 3;
+    int fallback_min_total_components = 3;
     int fallback_full_id_min_components = 6;
     float fallback_min_template_score = 0.52F;
     float fallback_min_contrast_score = 0.24F;
@@ -225,7 +227,6 @@ struct DetectorConfig {
         optical_center_y = std::clamp(optical_center_y, 0.0F,
                                       static_cast<float>(frame_height));
         benchmark_window = std::max<std::size_t>(16, benchmark_window);
-        min_additional_led_components = std::max(1, min_additional_led_components);
         previous_velocity_weight = std::clamp(previous_velocity_weight, 0.0F, 1.0F);
     }
 };

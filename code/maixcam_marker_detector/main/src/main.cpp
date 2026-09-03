@@ -80,6 +80,9 @@ void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
               << ",\"state\":\"" << toString(result.state)
               << "\",\"saturation_fraction\":" << result.saturation_fraction
               << ",\"matched_components\":" << result.matched_components
+              << ",\"matched_large_components\":" << result.matched_large_components
+              << ",\"matched_optional_components\":"
+              << result.matched_optional_components
               << "}\n" << std::flush;
 }
 
@@ -117,6 +120,8 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
            << " conf=" << static_cast<int>(result.confidence * 100.0F)
            << "% cand=" << debug.candidates.size()
            << "/" << debug.raw_contour_count
+           << " L=" << result.matched_large_components
+           << " opt=" << result.matched_optional_components
            << " thr=" << debug.led_threshold
            << " fps=" << static_cast<int>(result.effective_detection_fps + 0.5);
     cv::rectangle(annotated, cv::Rect(0, 0, annotated.cols, 24),

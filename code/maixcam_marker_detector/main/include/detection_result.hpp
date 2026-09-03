@@ -33,6 +33,8 @@ struct DetectionResult {
     DetectorState state = DetectorState::SEARCH_FULL;
     float saturation_fraction = 0.0F;
     int matched_components = 0;
+    int matched_large_components = 0;
+    int matched_optional_components = 0;
 };
 
 constexpr std::string_view toString(DetectionQuality value) noexcept {

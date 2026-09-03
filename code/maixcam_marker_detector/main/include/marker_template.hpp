@@ -12,6 +12,8 @@ namespace maixcam_marker {
 
 struct TemplateScore {
     float template_score = 0.0F;
+    float large_l_template_score = 0.0F;
+    float optional_template_score = 0.0F;
     float contrast_score = 0.0F;
     float black_board_score = 0.0F;
     float extra_bright_fraction = 1.0F;
@@ -45,6 +47,7 @@ private:
     DetectorConfig config_;
     MarkerGeometry geometry_;
     cv::Mat led_mask_;
+    cv::Mat large_l_mask_;
     cv::Mat board_mask_;
     cv::Mat large_l_shape_mask_;
     std::vector<cv::Point> large_l_shape_contour_;

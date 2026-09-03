@@ -314,17 +314,11 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTransform(
                    cv::Size(config_.canonical_size, config_.canonical_size),
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(127));
     hypothesis.detail = marker_template_.score(canonical_gray_, canonical_binary_);
-    const int additional_components = hypothesis.detail.matched_components -
-                                      hypothesis.detail.matched_large_components;
     const bool pattern_valid = path == HypothesisPath::LED_TRIPLE
         ? hypothesis.detail.matched_large_components == 3 &&
-              hypothesis.detail.contrast_score >= config_.min_detection_contrast_score &&
-              (additional_components >= config_.min_additional_led_components ||
-               hypothesis.detail.black_board_score >=
-                   config_.min_black_board_validation_score)
-        : hypothesis.detail.matched_large_components >= config_.fallback_min_large_components &&
-              hypothesis.detail.matched_components >= config_.fallback_min_total_components &&
-              hypothesis.detail.template_score >= config_.fallback_min_template_score &&
+              hypothesis.detail.contrast_score >= config_.min_detection_contrast_score
+        : hypothesis.detail.matched_large_components == 3 &&
+              hypothesis.detail.large_l_template_score >= config_.fallback_min_template_score &&
               hypothesis.detail.contrast_score >= config_.fallback_min_contrast_score &&
               hypothesis.detail.black_board_score >= config_.fallback_min_black_board_score;
     if (!pattern_valid) return hypothesis;
@@ -348,19 +342,37 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTransform(
     hypothesis.center = transformPoint(hypothesis.canonical_to_image,
                                        {last * 0.5F, last * 0.5F});
     hypothesis.topology_score = clamp01(topology_score);
-    hypothesis.total_score =
-        config_.topology_weight * hypothesis.topology_score +
-        config_.template_weight * hypothesis.detail.template_score +
-        config_.contrast_weight * hypothesis.detail.contrast_score +
-        config_.black_board_weight * hypothesis.detail.black_board_score;
+    if (path == HypothesisPath::LED_TRIPLE) {
+        hypothesis.acceptance_score =
+            config_.topology_weight * hypothesis.topology_score +
+            config_.template_weight * hypothesis.detail.large_l_template_score +
+            config_.contrast_weight * hypothesis.detail.contrast_score;
+        const float optional_evidence = std::max(
+            hypothesis.detail.optional_template_score,
+            hypothesis.detail.black_board_score);
+        hypothesis.total_score = hypothesis.acceptance_score +
+                                 config_.optional_evidence_weight * optional_evidence;
+    } else {
+        hypothesis.acceptance_score =
+            config_.topology_weight * hypothesis.topology_score +
+            config_.template_weight * hypothesis.detail.large_l_template_score +
+            config_.contrast_weight * hypothesis.detail.contrast_score +
+            config_.black_board_weight * hypothesis.detail.black_board_score;
+        hypothesis.total_score = hypothesis.acceptance_score;
+    }
     hypothesis.orientation = orientation;
     hypothesis.path = path;
-    hypothesis.valid = hypothesis.bbox.width >= config_.min_marker_width_px &&
-                       hypothesis.bbox.width <= config_.max_marker_width_px *
-                                                    config_.hypothesis_max_width_factor &&
-                       hypothesis.detail.extra_bright_fraction <=
-                           config_.max_extra_bright_fraction *
-                               config_.extra_bright_reject_factor;
+    const bool size_valid = hypothesis.bbox.width >= config_.min_marker_width_px &&
+                            hypothesis.bbox.width <= config_.max_marker_width_px *
+                                                         config_.hypothesis_max_width_factor;
+    // A topology-valid three-L observation is sufficient. Scene clutter is
+    // retained as optional scoring evidence and as a guard for the board-only
+    // fallback, but it cannot veto a directly observed large-L triple.
+    const bool clutter_valid = hypothesis.detail.extra_bright_fraction <=
+                               config_.max_extra_bright_fraction *
+                                   config_.extra_bright_reject_factor;
+    hypothesis.valid = size_valid &&
+                       (path == HypothesisPath::LED_TRIPLE || clutter_valid);
     return hypothesis;
 }
 
@@ -602,6 +614,7 @@ float MarkerDetector::temporalScore(const Hypothesis& hypothesis,
 }
 
 DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float confidence,
+                                           float acceptance_confidence,
                                            SteadyTimePoint capture_timestamp) {
     DetectionResult result;
     result.capture_timestamp = capture_timestamp;
@@ -613,24 +626,18 @@ DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float c
     if (hypothesis.path == HypothesisPath::DARK_BOARD) {
         threshold = std::max(threshold, config_.fallback_trackable_threshold);
     }
-    const int additional_components = hypothesis.detail.matched_components -
-                                      hypothesis.detail.matched_large_components;
-    const bool primary_additional_validation =
-        additional_components >= config_.min_additional_led_components ||
-        hypothesis.detail.black_board_score >= config_.min_black_board_validation_score;
     const bool primary_pattern_valid =
         hypothesis.path == HypothesisPath::LED_TRIPLE &&
-        hypothesis.detail.matched_large_components == 3 && primary_additional_validation;
+        hypothesis.detail.matched_large_components == 3;
     const bool fallback_pattern_valid =
         hypothesis.path == HypothesisPath::DARK_BOARD &&
-        hypothesis.detail.matched_large_components >= config_.fallback_min_large_components &&
-        hypothesis.detail.matched_components >= config_.fallback_min_total_components &&
-        hypothesis.detail.template_score >= config_.fallback_min_template_score &&
+        hypothesis.detail.matched_large_components == 3 &&
+        hypothesis.detail.large_l_template_score >= config_.fallback_min_template_score &&
         hypothesis.detail.contrast_score >= config_.fallback_min_contrast_score &&
         hypothesis.detail.black_board_score >= config_.fallback_min_black_board_score;
     result.found = hypothesis.valid && (primary_pattern_valid || fallback_pattern_valid) &&
                    hypothesis.detail.contrast_score > config_.min_detection_contrast_score &&
-                   result.confidence >= threshold;
+                   acceptance_confidence >= threshold;
     if (result.found) {
         result.bbox = hypothesis.bbox & cv::Rect2f(0.0F, 0.0F,
                                                     static_cast<float>(gray_.cols),
@@ -640,9 +647,11 @@ DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float c
         result.error_x_norm = result.error_x_px /
                               std::max(1.0F, 0.5F * static_cast<float>(config_.frame_width));
         result.matched_components = hypothesis.detail.matched_components;
+        result.matched_large_components = hypothesis.detail.matched_large_components;
+        result.matched_optional_components = result.matched_components -
+                                             result.matched_large_components;
         result.saturation_fraction = hypothesis.detail.saturation_fraction;
-        const int matched_small = hypothesis.detail.matched_components -
-                                  hypothesis.detail.matched_large_components;
+        const int matched_small = result.matched_optional_components;
         const int required_full_id_components = hypothesis.path == HypothesisPath::DARK_BOARD
             ? config_.fallback_full_id_min_components : config_.full_id_min_components;
         if (result.confidence >= config_.full_id_threshold &&
@@ -734,25 +743,29 @@ DetectionResult MarkerDetector::process(const cv::Mat& frame,
     makeGray(frame);
     Hypothesis best;
     float confidence = 0.0F;
+    float acceptance_confidence = 0.0F;
     if (!gray_.empty()) {
         const cv::Rect roi = trackingSearchRoi(capture_timestamp);
         if (roi.width >= config_.min_marker_width_px &&
             roi.height >= config_.min_marker_width_px) {
             const auto candidates = findLedCandidates(roi);
             best = findBestLedHypothesis(candidates, roi);
-            if (!best.valid || best.total_score < config_.trackable_threshold) {
+            if (!best.valid || best.acceptance_score < config_.trackable_threshold) {
                 Hypothesis fallback = findDarkBoardFallback(roi);
                 if (fallback.valid && (!best.valid || fallback.total_score > best.total_score)) {
                     best = std::move(fallback);
                 }
             }
             if (best.valid) {
-                confidence = best.total_score +
-                    config_.temporal_weight * temporalScore(best, capture_timestamp);
+                const float temporal = config_.temporal_weight *
+                                       temporalScore(best, capture_timestamp);
+                confidence = best.total_score + temporal;
+                acceptance_confidence = best.acceptance_score + temporal;
             }
         }
     }
-    DetectionResult result = makeResult(best, confidence, capture_timestamp);
+    DetectionResult result = makeResult(best, confidence, acceptance_confidence,
+                                        capture_timestamp);
     updateState(result, capture_timestamp);
     result.state = state_.mode;
     // Refresh output time after state bookkeeping so latency covers the complete
