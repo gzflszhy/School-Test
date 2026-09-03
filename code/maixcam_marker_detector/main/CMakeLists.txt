@@ -12,9 +12,9 @@ list(APPEND ADD_SRCS
     "src/benchmark.cpp"
 )
 
-# vision provides camera/image/OpenCV integration. display is used only when
-# the executable is started with --debug; normal mode does not render frames.
-list(APPEND ADD_REQUIREMENTS vision display)
+# vision provides camera, image, display and OpenCV integration in the pinned
+# MaixCDK 4.10.3 tree. Display code runs only when a debug flag is supplied.
+list(APPEND ADD_REQUIREMENTS vision)
 
 # MaixCDK projects do not impose a source-level C++ standard in the component
 # template.  This detector uses C++17 library features, so state it locally.
