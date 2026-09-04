@@ -36,6 +36,10 @@ struct DetectionResult {
     int matched_components = 0;
     int matched_large_components = 0;
     int matched_optional_components = 0;
+    std::array<cv::Point2f, 3> large_l_centers{};
+    int right_angle_label = -1;
+    int canonical_x_label = -1;
+    float marker_scale_px = 0.0F;
     std::array<bool, 3> optional_component_detected{};
     std::array<cv::Point2f, 3> optional_component_centers{
         cv::Point2f{-1.0F, -1.0F}, cv::Point2f{-1.0F, -1.0F},

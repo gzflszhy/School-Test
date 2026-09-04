@@ -485,6 +485,7 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTriple(
         asMatx23f(affine), proposal.topology_score,
         quantizeOrientation(canonical_x_endpoint - right_angle));
     candidate.large_l_triplet_valid = candidate.valid;
+    candidate.right_angle_label = labelOf(right_angle);
     candidate.canonical_x_label = canonical_x_label;
     candidate.large_l_centers = labelled;
     // This pattern centre is the hypotenuse midpoint. Unlike the physical
@@ -592,6 +593,21 @@ DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float c
             hypothesis.detail.matched_optional_components;
         result.matched_components = result.matched_large_components +
                                     result.matched_optional_components;
+        result.large_l_centers = hypothesis.large_l_centers;
+        result.right_angle_label = hypothesis.right_angle_label;
+        result.canonical_x_label = hypothesis.canonical_x_label;
+        if (result.right_angle_label >= 0 && result.right_angle_label < 3) {
+            const cv::Point2f& right_angle = result.large_l_centers[
+                static_cast<std::size_t>(result.right_angle_label)];
+            float leg_sum = 0.0F;
+            int leg_count = 0;
+            for (std::size_t i = 0; i < result.large_l_centers.size(); ++i) {
+                if (static_cast<int>(i) == result.right_angle_label) continue;
+                leg_sum += pointDistance(right_angle, result.large_l_centers[i]);
+                ++leg_count;
+            }
+            if (leg_count == 2) result.marker_scale_px = 0.5F * leg_sum;
+        }
         for (std::size_t i = 0; i < result.optional_component_detected.size(); ++i) {
             if (!hypothesis.optional_component_detected[i]) continue;
             result.optional_component_detected[i] = true;

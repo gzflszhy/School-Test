@@ -22,6 +22,16 @@ if(OpenCV_FOUND AND EXISTS "${CODE_DIR}/include/marker_detector.hpp")
   target_link_libraries(marker_detector_smoke PRIVATE ${OpenCV_LIBS})
   target_compile_features(marker_detector_smoke PRIVATE cxx_std_17)
   add_test(NAME marker_detector_smoke COMMAND marker_detector_smoke)
+
+  add_executable(lateral_controller_test
+    lateral_controller_test.cpp
+    "${CODE_DIR}/src/lateral_controller.cpp"
+    "${CODE_DIR}/src/marker_geometry.cpp")
+  target_include_directories(lateral_controller_test PRIVATE
+    "${CODE_DIR}/include" ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(lateral_controller_test PRIVATE ${OpenCV_LIBS})
+  target_compile_features(lateral_controller_test PRIVATE cxx_std_17)
+  add_test(NAME lateral_controller_test COMMAND lateral_controller_test)
 else()
   message(STATUS "SKIP C++ smoke: OpenCV and/or code/include/marker_detector.hpp unavailable")
 endif()

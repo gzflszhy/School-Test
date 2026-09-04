@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -17,6 +19,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "detector_config.hpp"
+#include "lateral_controller.hpp"
 #include "maix_camera_source.hpp"
 #include "marker_detector.hpp"
 
@@ -27,6 +30,7 @@ using namespace maixcam_marker;
 struct RuntimeOptions {
     bool debug = false;
     bool debug_display = false;
+    std::string control_config_path;
 };
 
 RuntimeOptions parseOptions(int argc, char** argv) {
@@ -38,10 +42,15 @@ RuntimeOptions parseOptions(int argc, char** argv) {
         } else if (argument == "--debug-display") {
             options.debug = true;
             options.debug_display = true;
+        } else if (argument == "--control-config") {
+            if (++i >= argc) throw std::runtime_error("--control-config requires a path");
+            options.control_config_path = argv[i];
         } else if (argument == "--help") {
-            std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display]\n"
+            std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display] "
+                         "[--control-config PATH]\n"
                          "  --debug          stream annotated frames to MaixVision\n"
-                         "  --debug-display  show on the device display and MaixVision\n";
+                         "  --debug-display  show on the device display and MaixVision\n"
+                         "  --control-config load lateral tracking key=value overrides\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + std::string(argument));
@@ -56,7 +65,8 @@ std::int64_t steadyMicros(SteadyTimePoint timestamp) {
         .count();
 }
 
-void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
+void writeJsonl(const DetectionResult& result, const LateralControlOutput& control,
+                std::uint64_t frame_sequence) {
     // Values are written directly because every string enum is produced by a
     // closed local enum-to-string conversion; no untrusted string is encoded.
     std::cout << "{\"frame_sequence\":" << frame_sequence
@@ -71,6 +81,25 @@ void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
               << ",\"center_y\":" << result.center.y
               << ",\"error_x_px\":" << result.error_x_px
               << ",\"error_x_norm\":" << result.error_x_norm
+              << ",\"control_valid\":" << (control.valid ? "true" : "false")
+              << ",\"control_source\":\"" << toString(control.source)
+              << "\",\"vy_mps\":" << control.vy_mps
+              << ",\"vy_unconstrained_mps\":" << control.unconstrained_vy_mps
+              << ",\"marker_scale_px\":" << control.marker_scale_px
+              << ",\"distance_m\":" << control.distance_m
+              << ",\"lateral_error_raw_m\":" << control.raw_lateral_error_m
+              << ",\"lateral_error_filtered_m\":"
+              << control.filtered_lateral_error_m
+              << ",\"relative_lateral_velocity_mps\":"
+              << control.relative_lateral_velocity_mps
+              << ",\"geometric_center_x_px\":" << control.geometric_center_x_px
+              << ",\"refined_center_x_px\":" << control.refined_center_x_px
+              << ",\"optional_refinement_used\":"
+              << (control.optional_refinement_used ? "true" : "false")
+              << ",\"optional_refinement_components\":"
+              << control.optional_refinement_components
+              << ",\"optional_correction_x_px\":"
+              << control.optional_correction_x_px
               << ",\"orientation\":\"" << toString(result.orientation)
               << "\",\"capture_timestamp_us\":" << steadyMicros(result.capture_timestamp)
               << ",\"output_timestamp_us\":" << steadyMicros(result.output_timestamp)
@@ -101,6 +130,8 @@ void writeJsonl(const DetectionResult& result, std::uint64_t frame_sequence) {
 }
 
 void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
+                    const LateralControlOutput& control,
+                    const LateralControlConfig& control_config,
                     const DetectorDebugSnapshot& debug,
                     maix::display::Display* display) {
     cv::Mat annotated;
@@ -168,6 +199,12 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
         cv::rectangle(annotated, detected_box, cv::Scalar(0, 255, 0), 2);
         cv::drawMarker(annotated, detected_center, cv::Scalar(0, 255, 0),
                        cv::MARKER_CROSS, 14, 2);
+        if (display != nullptr && control.optional_refinement_used) {
+            const cv::Point refined_center(
+                cvRound(control.refined_center_x_px), cvRound(result.center.y));
+            cv::drawMarker(annotated, refined_center, cv::Scalar(0, 255, 255),
+                           cv::MARKER_DIAMOND, 12, 2);
+        }
     }
 
     std::ostringstream status;
@@ -184,6 +221,42 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
     cv::putText(annotated, status.str(), cv::Point(5, 17),
                 cv::FONT_HERSHEY_SIMPLEX, 0.43, cv::Scalar(255, 255, 255), 1,
                 cv::LINE_AA);
+
+    if (display != nullptr) {
+        const int baseline_y = annotated.rows - 24;
+        const int origin_x = annotated.cols / 2;
+        const int maximum_arrow_px = std::min(120, annotated.cols / 3);
+        const float command_fraction = std::clamp(
+            control.vy_mps / std::max(0.01F, control_config.max_vy_mps), -1.0F, 1.0F);
+        // Positive AVC1 vy means vehicle-left, hence decreasing image X.
+        const int endpoint_x = origin_x - cvRound(command_fraction * maximum_arrow_px);
+        const cv::Scalar command_color = control.valid
+            ? cv::Scalar(0, 255, 0) : cv::Scalar(255, 64, 64);
+        cv::line(annotated, cv::Point(origin_x - maximum_arrow_px, baseline_y),
+                 cv::Point(origin_x + maximum_arrow_px, baseline_y),
+                 cv::Scalar(96, 96, 96), 1, cv::LINE_AA);
+        cv::drawMarker(annotated, cv::Point(origin_x, baseline_y),
+                       cv::Scalar(255, 255, 255), cv::MARKER_CROSS, 8, 1);
+        if (control.valid && endpoint_x != origin_x) {
+            cv::arrowedLine(annotated, cv::Point(origin_x, baseline_y),
+                            cv::Point(endpoint_x, baseline_y), command_color, 4,
+                            cv::LINE_AA, 0, 0.22);
+        } else {
+            cv::circle(annotated, cv::Point(origin_x, baseline_y), 6,
+                       command_color, 2, cv::LINE_AA);
+        }
+        const char* direction = !control.valid ? "STOP" :
+            (control.vy_mps > 0.001F ? "LEFT" :
+             (control.vy_mps < -0.001F ? "RIGHT" : "HOLD"));
+        std::ostringstream control_status;
+        control_status << std::fixed << std::setprecision(3)
+                       << "vy=" << control.vy_mps << "m/s " << direction
+                       << "  x=" << control.filtered_lateral_error_m * 1000.0F
+                       << "mm  vrel=" << control.relative_lateral_velocity_mps
+                       << "m/s  z=" << control.distance_m << "m";
+        cv::putText(annotated, control_status.str(), cv::Point(5, baseline_y - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, command_color, 1, cv::LINE_AA);
+    }
 
     cv::Mat full_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
     if (!debug.led_mask.empty() && debug.search_roi.area() > 0 &&
@@ -211,6 +284,13 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
 int run(const RuntimeOptions& options) {
     DetectorConfig detector_config;
     detector_config.normalize();
+    LateralControlConfig control_config;
+    if (!options.control_config_path.empty()) {
+        std::string error;
+        if (!loadLateralControlConfig(options.control_config_path, control_config, error)) {
+            throw std::runtime_error(error);
+        }
+    }
 
     CameraConfig camera_config;
     camera_config.width = detector_config.frame_width;
@@ -224,6 +304,7 @@ int run(const RuntimeOptions& options) {
 
     MaixCameraSource camera(camera_config);
     MarkerDetector detector(detector_config);
+    LateralController lateral_controller(control_config);
     detector.setDebugEnabled(options.debug);
     detector.setDebugCenterOverlayEnabled(options.debug_display);
     std::unique_ptr<maix::display::Display> display;
@@ -254,10 +335,12 @@ int run(const RuntimeOptions& options) {
         // frame owns the MaixCDK Image backing frame.gray().  process must
         // complete before the next read replaces (and releases) that image.
         const DetectionResult result = detector.process(frame.gray(), frame.capture_time());
+        const LateralControlOutput control = lateral_controller.update(result);
         if (options.debug) {
-            showDebugFrame(frame.gray(), result, detector.debugSnapshot(), display.get());
+            showDebugFrame(frame.gray(), result, control, lateral_controller.config(),
+                           detector.debugSnapshot(), display.get());
         }
-        writeJsonl(result, frame.sequence());
+        writeJsonl(result, control, frame.sequence());
     }
 
     std::cerr << detector.benchmark().summary() << '\n';

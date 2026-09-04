@@ -1,6 +1,6 @@
 # MaixCAM-Pro Marker Detector
 
-这是 MaixCAM-Pro（GC4653）上的 C++17 / MaixCDK / OpenCV 端侧 LED Marker 检测程序。生产入口没有 GUI、显示输出或逐帧保存；每处理一帧输出一行 JSONL，适合直接接入下游滤波/控制记录器。
+这是 MaixCAM-Pro（GC4653）上的 C++17 / MaixCDK / OpenCV 端侧 LED Marker 检测与横向跟随计算程序。生产入口没有 GUI、显示输出或逐帧保存；每处理一帧输出一行 JSONL。当前版本只计算并记录 `vy`，尚未打开 UART 或驱动车辆。
 
 当前主判定只依赖三个 30 mm 大 L：三者分别通过轮廓形状筛选，且其中心组成误差范围内符合 CAD 比例的等腰直角三角形，即可输出 `TRACKABLE`。程序不再搜索或判断黑色板；归一化模板只用于读取三个可选小部件、描述置信度，以及在两个以上小图形命中时输出方向和 `FULL_ID`。
 
@@ -76,6 +76,7 @@ maixcdk build
 ssh root@DEVICE_IP "mkdir -p /root/maixcam_marker_test/dl_lib"
 scp build/maixcam_marker_detector root@DEVICE_IP:/root/maixcam_marker_test/
 scp -r build/dl_lib/. root@DEVICE_IP:/root/maixcam_marker_test/dl_lib/
+scp lateral_control.conf root@DEVICE_IP:/root/maixcam_marker_test/
 ```
 
 在 MaixCAM-Pro 上运行：
@@ -91,7 +92,16 @@ ldd ./maixcam_marker_detector
 
 ## 输出与控制面约定
 
-主程序对每一个**成功取得且处理的**帧输出 JSONL。`found=false` 仍会输出一条记录，绝不使用上一帧预测结果冒充本帧检测。字段包括检测质量、置信度、bbox/中心、横向误差、方向、SEARCH/TRACK 状态、采集与输出时间戳、处理耗时和有效检测 FPS。
+主程序对每一个**成功取得且处理的**帧输出 JSONL。`found=false` 仍会输出一条记录，绝不使用上一帧预测结果冒充本帧检测。字段包括检测质量、置信度、bbox/中心、横向误差、方向、SEARCH/TRACK 状态、采集与输出时间戳、处理耗时、有效检测 FPS，以及标称距离、滤波状态与最终 `vy_mps`。
+
+横向控制参数集中在 `lateral_control.conf`。运行时加载无需重新编译：
+
+```bash
+./maixcam_marker_detector --control-config lateral_control.conf
+```
+
+完整字段解释、数据采集和从静态到实车的调参顺序见仓库根目录的
+`LATERAL_TRACKING_TUNING.md`。
 
 默认运行时无屏幕、无图像保存和无高频诊断日志。可通过信号正常退出；启动、相机打开失败和空读会写入 stderr。
 
@@ -117,7 +127,7 @@ ldd ./maixcam_marker_detector
 
 三个可选小部件仍会独立识别。调试画面以橙色斜十字标出其实际亮区中心：`S` 为小 L，`Q0`、`Q1` 为两个方块。JSON 的 `optional_features` 数组同步输出每个部件的 `found`、`center_x`、`center_y`；未命中时中心为 `-1,-1`。这些结果不会参与 `found` 判定，但会保留给后续坐标/位姿算法使用。
 
-调试绘制和图像传输会降低帧率，只用于排查，不应用于最终比赛模式。判断方法：右图没有完整 LED，优先检查曝光/PWM/阈值；右图完整但左图没有青框，说明轮廓条件仍过严；有至少三个位置正确的青框但没有绿框，说明三中心的拓扑约束未通过。
+`--debug-display` 还会在画面底部绘制 `vy`：向左箭头表示正速度，向右箭头表示负速度，长度表示相对 `max_vy_mps` 的大小；绿色十字为三 L 几何中心，青色菱形为小部件一致性修正中心。调试绘制和图像传输会降低帧率，只用于排查，不应用于最终比赛模式。
 
 ## 实机前必须验证
 

@@ -9,6 +9,7 @@ list(APPEND ADD_SRCS
     "src/marker_geometry.cpp"
     "src/marker_template.cpp"
     "src/marker_detector.cpp"
+    "src/lateral_controller.cpp"
     "src/benchmark.cpp"
 )
 
