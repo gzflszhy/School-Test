@@ -77,6 +77,11 @@ void LateralControlConfig::normalize() {
                                              max_command_acceleration_mps2);
     nominal_update_period_s = std::clamp(nominal_update_period_s,
                                          filter_min_dt_s, filter_max_dt_s);
+    search_speed_mps = std::clamp(search_speed_mps, 0.0F, max_vy_mps);
+    search_first_leg_s = std::max(nominal_update_period_s, search_first_leg_s);
+    search_max_duration_s = std::max(search_first_leg_s, search_max_duration_s);
+    search_velocity_direction_threshold_mps = std::max(
+        0.0F, search_velocity_direction_threshold_mps);
 }
 
 LateralController::LateralController(LateralControlConfig config)
@@ -95,14 +100,24 @@ LateralController::LateralController(LateralControlConfig config)
     }
 }
 
-void LateralController::reset() noexcept {
+void LateralController::clearTrackingState(bool clear_command) noexcept {
     initialized_ = false;
     filtered_position_m_ = 0.0F;
     filtered_velocity_mps_ = 0.0F;
     integral_command_mps_ = 0.0F;
-    last_command_mps_ = 0.0F;
-    last_update_ = {};
+    if (clear_command) last_command_mps_ = 0.0F;
     last_measurement_ = {};
+}
+
+void LateralController::reset() noexcept {
+    clearTrackingState(true);
+    last_update_ = {};
+    has_target_history_ = false;
+    search_active_ = false;
+    search_initial_direction_ = 1.0F;
+    last_observed_position_m_ = 0.0F;
+    last_observed_velocity_mps_ = 0.0F;
+    search_started_ = {};
 }
 
 bool LateralController::makeMeasurement(const DetectionResult& detection,
@@ -221,13 +236,66 @@ float LateralController::limitedCommand(float requested, float dt_s,
     return last_command_mps_;
 }
 
+LateralControlOutput LateralController::searchCommand(
+    LateralControlOutput output, SteadyTimePoint now, float dt_s) {
+    if (!search_active_) {
+        float direction_source = last_observed_position_m_;
+        if (std::abs(last_observed_velocity_mps_) >=
+            config_.search_velocity_direction_threshold_mps) {
+            direction_source = last_observed_velocity_mps_;
+        } else if (std::abs(direction_source) <= config_.position_deadband_m &&
+                   std::abs(last_command_mps_) > 0.001F) {
+            direction_source = last_command_mps_;
+        }
+        search_initial_direction_ = direction_source < 0.0F ? -1.0F : 1.0F;
+        search_started_ = now;
+        search_active_ = true;
+        clearTrackingState(false);
+    }
+
+    const float elapsed_s = std::max(
+        0.0F, static_cast<float>(
+                  std::chrono::duration<double>(now - search_started_).count()));
+    if (elapsed_s > config_.search_max_duration_s ||
+        config_.search_speed_mps <= 0.0F) {
+        reset();
+        return output;
+    }
+
+    int leg = 0;
+    float direction = search_initial_direction_;
+    if (elapsed_s >= config_.search_first_leg_s) {
+        leg = 1 + static_cast<int>(std::floor(
+            (elapsed_s - config_.search_first_leg_s) /
+            (2.0F * config_.search_first_leg_s)));
+        direction = (leg & 1) != 0
+            ? -search_initial_direction_ : search_initial_direction_;
+    }
+
+    output.valid = true;
+    output.source = LateralControlSource::SEARCHING;
+    output.search_elapsed_s = elapsed_s;
+    output.search_leg = leg;
+    output.unconstrained_vy_mps = direction * config_.search_speed_mps;
+    output.vy_mps = limitedCommand(output.unconstrained_vy_mps, dt_s,
+                                   output.command_saturated,
+                                   output.acceleration_limited);
+    return output;
+}
+
 LateralControlOutput LateralController::update(const DetectionResult& detection) {
     LateralControlOutput output;
     const bool measurement_valid = makeMeasurement(detection, output);
     const SteadyTimePoint now = detection.capture_timestamp;
     float dt_s = config_.nominal_update_period_s;
-    if (initialized_ && last_update_ != SteadyTimePoint{}) {
+    if (last_update_ != SteadyTimePoint{}) {
         dt_s = static_cast<float>(std::chrono::duration<double>(now - last_update_).count());
+    }
+
+    if (measurement_valid && search_active_) {
+        search_active_ = false;
+        search_started_ = {};
+        clearTrackingState(false);
     }
 
     if (measurement_valid &&
@@ -273,12 +341,20 @@ LateralControlOutput LateralController::update(const DetectionResult& detection)
     last_update_ = now;
     output.valid = initialized_ && output.source != LateralControlSource::INVALID;
     if (!output.valid) {
+        if (config_.search_enabled && (search_active_ || has_target_history_)) {
+            return searchCommand(std::move(output), now, dt_s);
+        }
         reset();
         return output;
     }
 
     output.filtered_lateral_error_m = filtered_position_m_;
     output.relative_lateral_velocity_mps = filtered_velocity_mps_;
+    if (output.source == LateralControlSource::MEASURED) {
+        has_target_history_ = true;
+        last_observed_position_m_ = filtered_position_m_;
+        last_observed_velocity_mps_ = filtered_velocity_mps_;
+    }
     float controlled_position = filtered_position_m_;
     if (std::abs(controlled_position) <= config_.position_deadband_m) {
         controlled_position = 0.0F;
@@ -380,6 +456,10 @@ bool loadLateralControlConfig(const std::string& path, LateralControlConfig& con
         SET_FLOAT(max_vy_mps)
         SET_FLOAT(max_command_acceleration_mps2)
         SET_FLOAT(nominal_update_period_s)
+        SET_FLOAT(search_speed_mps)
+        SET_FLOAT(search_first_leg_s)
+        SET_FLOAT(search_max_duration_s)
+        SET_FLOAT(search_velocity_direction_threshold_mps)
 #undef SET_FLOAT
         if (key == "optional_refinement_enabled") {
             if (value != 0.0F && value != 1.0F) {
@@ -387,6 +467,14 @@ bool loadLateralControlConfig(const std::string& path, LateralControlConfig& con
                 return false;
             }
             config.optional_refinement_enabled = value != 0.0F;
+            continue;
+        }
+        if (key == "search_enabled") {
+            if (value != 0.0F && value != 1.0F) {
+                error = "search_enabled must be 0 or 1";
+                return false;
+            }
+            config.search_enabled = value != 0.0F;
             continue;
         }
         if (key == "optional_refinement_min_components") {

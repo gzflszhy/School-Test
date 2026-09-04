@@ -1,6 +1,6 @@
 # MaixCAM-Pro Marker Detector
 
-这是 MaixCAM-Pro（GC4653）上的 C++17 / MaixCDK / OpenCV 端侧 LED Marker 检测与横向跟随计算程序。生产入口没有 GUI、显示输出或逐帧保存；每处理一帧输出一行 JSONL。当前版本只计算并记录 `vy`，尚未打开 UART 或驱动车辆。
+这是 MaixCAM-Pro（GC4653）上的 C++17 / MaixCDK / OpenCV 端侧 LED Marker 检测与横向跟随程序。生产入口没有 GUI、显示输出或逐帧保存；每处理一帧输出一行 JSONL。默认只计算并记录 `vy`；只有显式提供 `--chassis-uart` 才会按 AVC1 协议向底盘发送命令。
 
 当前主判定只依赖三个 30 mm 大 L：三者分别通过轮廓形状筛选，且其中心组成误差范围内符合 CAD 比例的等腰直角三角形，即可输出 `TRACKABLE`。程序不再搜索或判断黑色板；归一化模板只用于读取三个可选小部件、描述置信度，以及在两个以上小图形命中时输出方向和 `FULL_ID`。
 
@@ -30,7 +30,7 @@
 
 ## MaixCDK 构建与部署
 
-将本目录作为 MaixCDK 项目目录导入/打开，并使用 MaixCDK（或 MaixVision）的 Release 构建流程。`main/CMakeLists.txt` 是官方 component 格式：它声明 `vision` 依赖，后者提供 `maix::camera::Camera`、`maix::image` 和 MaixCDK 的 OpenCV 集成。
+将本目录作为 MaixCDK 项目目录导入/打开，并使用 MaixCDK（或 MaixVision）的 Release 构建流程。`main/CMakeLists.txt` 是官方 component 格式：它声明 `vision` 和 `peripheral` 依赖，分别提供相机/OpenCV集成和官方 UART API。
 
 项目只请求官方 API 已公开的调用：
 
@@ -102,6 +102,30 @@ ldd ./maixcam_marker_detector
 
 完整字段解释、数据采集和从静态到实车的调参顺序见仓库根目录的
 `LATERAL_TRACKING_TUNING.md`。
+
+## AVC1 实车输出
+
+MaixCAM-Pro 推荐使用 UART1：`A19/UART1_TX` 接 C 板 `PG9/USART6_RX`，两板 GND
+共地，均为3.3 V TTL。不要使用5 V或RS-232电平。设备节点通常为 `/dev/ttyS1`。
+
+默认不打开串口。第一次联调使用独立的0.10 m/s发送限幅：
+
+```bash
+./maixcam_marker_detector --control-config lateral_control.conf \
+  --chassis-uart /dev/ttyS1 --chassis-vy-limit 0.10
+```
+
+程序固定发送 `vx=0`，只控制横移。每个视觉周期发送一帧24字节 AVC1 命令；发送序号
+包括停车帧在内持续递增。控制结果失效时发送 `valid=0,vx=0,vy=0`；首次打开串口、
+相机空读和正常退出时也主动发送停车帧。串口写失败会使程序报错退出，C板另有
+200 ms超时停车。`--chassis-vy-limit` 是串口侧独立安全限幅，不会改变日志中的
+控制器原始 `vy_mps`；实际发送值见 `chassis_tx_vy_mps`。
+
+目标短失联先预测100 ms；仍未找到且此前锁定过目标时，程序沿最后目标方向进入
+低速横移扫描。重新识别后清除旧积分并重新居中；默认搜索8秒仍失败则发送
+`valid=0` 停车。搜索速度、扫描周期和超时均在 `lateral_control.conf` 中配置。
+
+完整接线、PS2操作和联调顺序见仓库根目录的 `REAL_CHASSIS_INTEGRATION.md`。
 
 默认运行时无屏幕、无图像保存和无高频诊断日志。可通过信号正常退出；启动、相机打开失败和空读会写入 stderr。
 

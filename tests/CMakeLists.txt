@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(marker_detector_host_tests LANGUAGES CXX)
 enable_testing()
-find_package(OpenCV QUIET COMPONENTS core imgproc)
 set(CODE_DIR "${CMAKE_CURRENT_LIST_DIR}/../code/maixcam_marker_detector/main")
+
+add_executable(avc1_protocol_test
+  avc1_protocol_test.cpp
+  "${CODE_DIR}/src/avc1_protocol.cpp")
+target_include_directories(avc1_protocol_test PRIVATE "${CODE_DIR}/include")
+target_compile_features(avc1_protocol_test PRIVATE cxx_std_17)
+add_test(NAME avc1_protocol_test COMMAND avc1_protocol_test)
+
+find_package(OpenCV QUIET COMPONENTS core imgproc)
 if(OpenCV_FOUND AND EXISTS "${CODE_DIR}/include/marker_detector.hpp")
   add_executable(marker_detector_smoke smoke_test.cpp)
   target_include_directories(marker_detector_smoke PRIVATE "${CODE_DIR}/include" ${OpenCV_INCLUDE_DIRS})

@@ -40,25 +40,34 @@ struct LateralControlConfig {
     float max_relative_velocity_mps = 1.50F;
 
     // vy is positive to vehicle-left. These are deliberately conservative
-    // defaults for log-only validation before the first chassis test.
+    // defaults for the first live chassis direction and stop checks.
     float position_deadband_m = 0.002F;
     float lateral_kp_per_s = 2.50F;
-    float lateral_ki_per_s2 = 1.50F;
-    float max_integral_vy_mps = 0.55F;
-    float relative_velocity_gain = 0.85F;
-    float max_vy_mps = 0.60F;
-    float max_command_acceleration_mps2 = 2.00F;
+    float lateral_ki_per_s2 = 0.50F;
+    float max_integral_vy_mps = 0.08F;
+    float relative_velocity_gain = 0.00F;
+    float max_vy_mps = 0.10F;
+    float max_command_acceleration_mps2 = 0.50F;
     float nominal_update_period_s = 0.040F;
+
+    // After short prediction expires, translate toward the last observation,
+    // then sweep around the loss position. Search is time/distance bounded.
+    bool search_enabled = true;
+    float search_speed_mps = 0.08F;
+    float search_first_leg_s = 1.00F;
+    float search_max_duration_s = 8.00F;
+    float search_velocity_direction_threshold_mps = 0.02F;
 
     void normalize();
 };
 
-enum class LateralControlSource { INVALID, MEASURED, PREDICTED };
+enum class LateralControlSource { INVALID, MEASURED, PREDICTED, SEARCHING };
 
 constexpr std::string_view toString(LateralControlSource source) noexcept {
     switch (source) {
         case LateralControlSource::MEASURED: return "MEASURED";
         case LateralControlSource::PREDICTED: return "PREDICTED";
+        case LateralControlSource::SEARCHING: return "SEARCHING";
         default: return "INVALID";
     }
 }
@@ -83,6 +92,8 @@ struct LateralControlOutput {
     float vy_mps = 0.0F;
     bool command_saturated = false;
     bool acceleration_limited = false;
+    float search_elapsed_s = 0.0F;
+    int search_leg = -1;
 };
 
 class LateralController {
@@ -98,6 +109,9 @@ private:
                          LateralControlOutput& output) const;
     float limitedCommand(float requested, float dt_s, bool& saturated,
                          bool& acceleration_limited);
+    LateralControlOutput searchCommand(LateralControlOutput output,
+                                       SteadyTimePoint now, float dt_s);
+    void clearTrackingState(bool clear_command) noexcept;
 
     LateralControlConfig config_;
     MarkerGeometry geometry_;
@@ -109,6 +123,12 @@ private:
     float last_command_mps_ = 0.0F;
     SteadyTimePoint last_update_{};
     SteadyTimePoint last_measurement_{};
+    bool has_target_history_ = false;
+    bool search_active_ = false;
+    float search_initial_direction_ = 1.0F;
+    float last_observed_position_m_ = 0.0F;
+    float last_observed_velocity_mps_ = 0.0F;
+    SteadyTimePoint search_started_{};
 };
 
 // Optional runtime override file: one `key=value` per line, '#' comments.

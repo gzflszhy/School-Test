@@ -1,7 +1,7 @@
 id: maixcam_marker_detector
 name: MaixCAM Marker Detector
 name[zh]: MaixCAM 标记检测器
-version: 0.4.0
+version: 0.5.0
 author: RoboMaster
 desc: Low-latency GC4653 LED marker detector for MaixCAM-Pro
 desc[zh]: 面向 MaixCAM-Pro 的低延迟 GC4653 LED 标记检测器

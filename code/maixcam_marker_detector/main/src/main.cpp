@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -19,6 +20,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "detector_config.hpp"
+#include "avc1_uart_sender.hpp"
 #include "lateral_controller.hpp"
 #include "maix_camera_source.hpp"
 #include "marker_detector.hpp"
@@ -31,6 +33,8 @@ struct RuntimeOptions {
     bool debug = false;
     bool debug_display = false;
     std::string control_config_path;
+    std::string chassis_uart_path;
+    float chassis_vy_limit_mps = 0.10F;
 };
 
 RuntimeOptions parseOptions(int argc, char** argv) {
@@ -45,12 +49,31 @@ RuntimeOptions parseOptions(int argc, char** argv) {
         } else if (argument == "--control-config") {
             if (++i >= argc) throw std::runtime_error("--control-config requires a path");
             options.control_config_path = argv[i];
+        } else if (argument == "--chassis-uart") {
+            if (++i >= argc) throw std::runtime_error("--chassis-uart requires a path");
+            options.chassis_uart_path = argv[i];
+        } else if (argument == "--chassis-vy-limit") {
+            if (++i >= argc) {
+                throw std::runtime_error("--chassis-vy-limit requires m/s");
+            }
+            std::size_t consumed = 0;
+            options.chassis_vy_limit_mps = std::stof(argv[i], &consumed);
+            if (consumed != std::string(argv[i]).size() ||
+                !std::isfinite(options.chassis_vy_limit_mps) ||
+                options.chassis_vy_limit_mps <= 0.0F ||
+                options.chassis_vy_limit_mps > 0.8F) {
+                throw std::runtime_error(
+                    "--chassis-vy-limit must be in (0, 0.8]");
+            }
         } else if (argument == "--help") {
             std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display] "
-                         "[--control-config PATH]\n"
+                         "[--control-config PATH] [--chassis-uart PATH] "
+                         "[--chassis-vy-limit MPS]\n"
                          "  --debug          stream annotated frames to MaixVision\n"
                          "  --debug-display  show on the device display and MaixVision\n"
-                         "  --control-config load lateral tracking key=value overrides\n";
+                         "  --control-config load lateral tracking key=value overrides\n"
+                         "  --chassis-uart   enable AVC1 output on this UART (e.g. /dev/ttyS1)\n"
+                         "  --chassis-vy-limit independent transmit limit, default 0.10 m/s\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + std::string(argument));
@@ -66,6 +89,7 @@ std::int64_t steadyMicros(SteadyTimePoint timestamp) {
 }
 
 void writeJsonl(const DetectionResult& result, const LateralControlOutput& control,
+                const Avc1TransmitResult& chassis_tx,
                 std::uint64_t frame_sequence) {
     // Values are written directly because every string enum is produced by a
     // closed local enum-to-string conversion; no untrusted string is encoded.
@@ -99,6 +123,19 @@ void writeJsonl(const DetectionResult& result, const LateralControlOutput& contr
               << (control.command_saturated ? "true" : "false")
               << ",\"acceleration_limited\":"
               << (control.acceleration_limited ? "true" : "false")
+              << ",\"search_elapsed_s\":" << control.search_elapsed_s
+              << ",\"search_leg\":" << control.search_leg
+              << ",\"chassis_uart_enabled\":"
+              << (chassis_tx.enabled ? "true" : "false")
+              << ",\"chassis_tx_attempted\":"
+              << (chassis_tx.attempted ? "true" : "false")
+              << ",\"chassis_tx_success\":"
+              << (chassis_tx.success ? "true" : "false")
+              << ",\"chassis_tx_seq\":" << chassis_tx.sequence
+              << ",\"chassis_tx_valid\":"
+              << (chassis_tx.valid ? "true" : "false")
+              << ",\"chassis_tx_vx_mps\":" << chassis_tx.vx_mps
+              << ",\"chassis_tx_vy_mps\":" << chassis_tx.vy_mps
               << ",\"geometric_center_x_px\":" << control.geometric_center_x_px
               << ",\"refined_center_x_px\":" << control.refined_center_x_px
               << ",\"optional_refinement_used\":"
@@ -272,17 +309,23 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
              (control.vy_mps < -0.001F ? "RIGHT" : "HOLD"));
         std::ostringstream control_status;
         control_status << std::fixed << std::setprecision(3)
-                       << "vy=" << control.vy_mps << "m/s " << direction
+                       << toString(control.source) << " vy=" << control.vy_mps
+                       << "m/s " << direction
                        << "  x=" << control.filtered_lateral_error_m * 1000.0F
                        << "mm  z=" << control.distance_m << "m";
         cv::putText(annotated, control_status.str(), cv::Point(5, baseline_y - 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.40, command_color, 1, cv::LINE_AA);
         std::ostringstream terms;
-        terms << std::fixed << std::setprecision(3)
-              << "P=" << control.vy_position_mps
-              << " I=" << control.vy_integral_mps
-              << " V=" << control.vy_velocity_mps
-              << " vrel=" << control.relative_lateral_velocity_mps;
+        terms << std::fixed << std::setprecision(3);
+        if (control.source == LateralControlSource::SEARCHING) {
+            terms << "SEARCH leg=" << control.search_leg
+                  << " t=" << control.search_elapsed_s << "s";
+        } else {
+            terms << "P=" << control.vy_position_mps
+                  << " I=" << control.vy_integral_mps
+                  << " V=" << control.vy_velocity_mps
+                  << " vrel=" << control.relative_lateral_velocity_mps;
+        }
         if (control.command_saturated) terms << " SAT";
         if (control.acceleration_limited) terms << " SLEW";
         cv::putText(annotated, terms.str(), cv::Point(5, baseline_y - 28),
@@ -344,6 +387,14 @@ int run(const RuntimeOptions& options) {
     }
     CameraFrame frame;
     std::uint64_t consecutive_empty_reads = 0;
+    std::unique_ptr<Avc1UartSender> chassis_sender;
+    if (!options.chassis_uart_path.empty()) {
+        chassis_sender = std::make_unique<Avc1UartSender>(
+            options.chassis_uart_path);
+        std::cerr << "AVC1 chassis output enabled on "
+                  << chassis_sender->port() << " at 115200 8N1, vx=0, |vy|<="
+                  << options.chassis_vy_limit_mps << " m/s\n";
+    }
 
     std::cerr << "maixcam_marker_detector: camera " << camera_config.width << "x"
               << camera_config.height << " @ " << camera_config.fps
@@ -353,6 +404,14 @@ int run(const RuntimeOptions& options) {
         if (!camera.read(frame)) {
             ++consecutive_empty_reads;
             detector.recordDroppedFrame();
+            if (chassis_sender && consecutive_empty_reads == 1) {
+                const Avc1TransmitResult stopped =
+                    chassis_sender->transmit(0.0F, 0.0F, false);
+                if (!stopped.success) {
+                    throw std::runtime_error("AVC1 stop write failed: " +
+                                             chassis_sender->lastError());
+                }
+            }
             // Do not contaminate stdout: it is an exclusively JSONL data API.
             // Rate-limit the exceptional path to avoid log-induced latency.
             if (consecutive_empty_reads == 1 || consecutive_empty_reads % 120 == 0) {
@@ -367,11 +426,24 @@ int run(const RuntimeOptions& options) {
         // complete before the next read replaces (and releases) that image.
         const DetectionResult result = detector.process(frame.gray(), frame.capture_time());
         const LateralControlOutput control = lateral_controller.update(result);
+        Avc1TransmitResult chassis_tx;
+        if (chassis_sender) {
+            const float transmitted_vy = control.valid
+                ? std::clamp(control.vy_mps, -options.chassis_vy_limit_mps,
+                             options.chassis_vy_limit_mps)
+                : 0.0F;
+            chassis_tx = chassis_sender->transmit(
+                0.0F, transmitted_vy, control.valid);
+            if (!chassis_tx.success) {
+                throw std::runtime_error("AVC1 command write failed: " +
+                                         chassis_sender->lastError());
+            }
+        }
         if (options.debug) {
             showDebugFrame(frame.gray(), result, control, lateral_controller.config(),
                            detector.debugSnapshot(), display.get());
         }
-        writeJsonl(result, control, frame.sequence());
+        writeJsonl(result, control, chassis_tx, frame.sequence());
     }
 
     std::cerr << detector.benchmark().summary() << '\n';

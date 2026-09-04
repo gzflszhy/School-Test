@@ -1,7 +1,8 @@
 # MaixCAM 横向跟随调参与数据采集手册
 
-本文对应 `maixcam_marker_detector` 的日志级横向控制器。当前版本只计算并显示
-`vy`，不会打开 UART，也不会让底盘运动。
+本文对应 `maixcam_marker_detector` 的横向控制器。默认只计算并显示 `vy`；只有显式
+提供 `--chassis-uart` 才会打开UART。接线、停车逻辑和首次实车步骤另见
+`REAL_CHASSIS_INTEGRATION.md`。
 
 ## 1. 坐标和符号
 
@@ -77,6 +78,8 @@ lateral_error_m = -(refined_center_x_px - principal_x_px)
 | `vy_velocity_mps` | 相对速度前馈项 V |
 | `command_saturated` | 限制前命令是否超过速度上限 |
 | `acceleration_limited` | 本帧命令是否受到变化率限制 |
+| `search_elapsed_s` | 当前失联搜索已经持续的时间 |
+| `search_leg` | 搜索段编号；`-1`表示未搜索，0为最后方向，之后左右交替 |
 | `geometric_center_x_px` | 三大 L 斜边中点 |
 | `refined_center_x_px` | 小部件修正后的中心 |
 | `optional_refinement_used` | 本帧是否实际应用小部件修正 |
@@ -152,6 +155,23 @@ vy_raw = P + I + V
 - `max_command_acceleration_mps2`：MaixCAM侧的命令变化率限制。C板仍保留自己的
   加速度安全限制。
 
+### 失联搜索
+
+识别短暂丢失时先使用 `max_prediction_age_s`（默认100 ms）的匀速预测。仍未找回后，
+若此前至少可靠识别过一次，则进入 `SEARCHING`：优先沿最后可靠相对速度方向，其次
+沿最后位置偏差方向平移；第一段结束后以两倍时长反向，随后等时左右扫描，使车辆
+近似围绕失联位置搜索。重新识别后清除搜索状态和旧积分，从新测量重新居中。
+
+- `search_enabled`：是否允许失联后主动平移搜索。
+- `search_speed_mps`：搜索速度，首次实车默认0.08 m/s。
+- `search_first_leg_s`：最后方向的第一段时长；后续每段为其两倍。
+- `search_max_duration_s`：最长搜索时间，默认8秒；超时发送无效零速帧。
+- `search_velocity_direction_threshold_mps`：最后速度超过此值时，优先用速度确定
+  目标离开方向，避免中心附近只靠位置符号误判。
+
+搜索没有轮速里程计反馈，范围是按“命令速度×时间”近似得到的；打滑会使扫描中心
+逐渐漂移，因此必须保留总超时，不能无限搜索。
+
 ## 6. 推荐调参顺序
 
 每次只修改一组参数，并保存参数文件、日志、距离和场景说明。
@@ -221,5 +241,6 @@ vy_raw = P + I + V
 
 ## 8. 当前默认值的定位
 
-默认参数用于宿舍日志验证，不是比赛最终参数。尤其是 `max_vy_mps=0.60` 只是让
-离线箭头和日志保留动态范围；接入UART前必须按阶段C先降到0.10 m/s。
+默认参数已经切换为首次实车安全值：`max_vy_mps=0.10`、积分上限0.08 m/s、速度
+前馈关闭、搜索速度0.08 m/s。它们不是比赛最终参数；必须按阶段C逐项验证后才能
+提高速度或恢复速度前馈。

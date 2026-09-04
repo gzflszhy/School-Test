@@ -30,6 +30,13 @@ int main() {
     LateralController controller(config);
     const auto start = std::chrono::steady_clock::now();
 
+    DetectionResult initially_missing;
+    initially_missing.capture_timestamp = start;
+    LateralController never_locked_controller(config);
+    const auto never_locked = never_locked_controller.update(initially_missing);
+    assert(!never_locked.valid);
+    assert(never_locked.source == LateralControlSource::INVALID);
+
     const auto centered = controller.update(markerAt(240.0F, start));
     assert(centered.valid);
     assert(centered.source == LateralControlSource::MEASURED);
@@ -77,8 +84,22 @@ int main() {
     assert(predicted.source == LateralControlSource::PREDICTED);
 
     missing.capture_timestamp = start + std::chrono::milliseconds(160);
-    const auto stopped = controller.update(missing);
-    assert(!stopped.valid);
-    assert(stopped.vy_mps == 0.0F);
+    const auto searching = controller.update(missing);
+    assert(searching.valid);
+    assert(searching.source == LateralControlSource::SEARCHING);
+    assert(searching.vy_mps > 0.0F);
+
+    const auto reacquired = controller.update(markerAt(
+        240.0F, start + std::chrono::milliseconds(200)));
+    assert(reacquired.valid);
+    assert(reacquired.source == LateralControlSource::MEASURED);
+
+    missing.capture_timestamp = start + std::chrono::milliseconds(400);
+    const auto searching_again = controller.update(missing);
+    assert(searching_again.source == LateralControlSource::SEARCHING);
+    missing.capture_timestamp = start + std::chrono::milliseconds(8500);
+    const auto search_timeout = controller.update(missing);
+    assert(!search_timeout.valid);
+    assert(search_timeout.vy_mps == 0.0F);
     return 0;
 }

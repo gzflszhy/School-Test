@@ -5,6 +5,8 @@ list(APPEND ADD_INCLUDE "include")
 # list explicit makes the target deterministic and avoids compiling test/tools.
 list(APPEND ADD_SRCS
     "src/main.cpp"
+    "src/avc1_protocol.cpp"
+    "src/avc1_uart_sender.cpp"
     "src/maix_camera_source.cpp"
     "src/marker_geometry.cpp"
     "src/marker_template.cpp"
@@ -15,7 +17,7 @@ list(APPEND ADD_SRCS
 
 # vision provides camera, image, display and OpenCV integration in the pinned
 # MaixCDK 4.10.3 tree. Display code runs only when a debug flag is supplied.
-list(APPEND ADD_REQUIREMENTS vision)
+list(APPEND ADD_REQUIREMENTS vision peripheral)
 
 # MaixCDK projects do not impose a source-level C++ standard in the component
 # template.  This detector uses C++17 library features, so state it locally.
