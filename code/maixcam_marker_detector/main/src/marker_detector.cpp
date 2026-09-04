@@ -414,25 +414,83 @@ bool MarkerDetector::makeTripleProposal(const LedCandidate& a, const LedCandidat
 MarkerDetector::Hypothesis MarkerDetector::evaluateTriple(
     const TripleProposal& proposal) {
     const auto& canonical = marker_template_.largeLCentersPx();
-    Hypothesis best;
-    for (int swap = 0; swap < 2; ++swap) {
-        const cv::Point2f& r = proposal.image_points[0];
-        const cv::Point2f& p = proposal.image_points[1];
-        const cv::Point2f& q = proposal.image_points[2];
-        const std::array<cv::Point2f, 3> image_points = swap == 0
-            ? std::array<cv::Point2f, 3>{{r, p, q}}
-            : std::array<cv::Point2f, 3>{{r, q, p}};
-        const cv::Mat affine = cv::getAffineTransform(image_points.data(), canonical.data());
-        Hypothesis candidate = evaluateTransform(
-            asMatx23f(affine), proposal.topology_score,
-            quantizeOrientation(image_points[1] - image_points[0]));
-        candidate.large_l_triplet_valid = candidate.valid;
-        candidate.large_l_centers = image_points;
-        if (candidate.valid && (!best.valid || candidate.total_score > best.total_score)) {
-            best = std::move(candidate);
+    const cv::Point2f& right_angle = proposal.image_points[0];
+    const std::array<cv::Point2f, 3> detected{{proposal.image_points[0],
+                                               proposal.image_points[1],
+                                               proposal.image_points[2]}};
+
+    // L0/L1/L2 are initialized top-to-bottom. During tracking, preserve those
+    // identities with the minimum-displacement permutation instead of allowing
+    // the two equal triangle legs to exchange labels from frame to frame.
+    std::array<cv::Point2f, 3> labelled = detected;
+    if (!state_.has_large_l_identity) {
+        std::sort(labelled.begin(), labelled.end(), [](const cv::Point2f& lhs,
+                                                       const cv::Point2f& rhs) {
+            if (lhs.y != rhs.y) return lhs.y < rhs.y;
+            return lhs.x < rhs.x;
+        });
+    } else {
+        constexpr std::array<std::array<int, 3>, 6> permutations{{
+            {{0, 1, 2}}, {{0, 2, 1}}, {{1, 0, 2}},
+            {{1, 2, 0}}, {{2, 0, 1}}, {{2, 1, 0}}}};
+        float best_cost = std::numeric_limits<float>::max();
+        for (const auto& order : permutations) {
+            float cost = 0.0F;
+            for (std::size_t label = 0; label < labelled.size(); ++label) {
+                cost += pointDistance(detected[static_cast<std::size_t>(order[label])],
+                                      state_.last_large_l_centers[label]);
+            }
+            if (cost < best_cost) {
+                best_cost = cost;
+                for (std::size_t label = 0; label < labelled.size(); ++label) {
+                    labelled[label] = detected[static_cast<std::size_t>(order[label])];
+                }
+            }
         }
     }
-    return best;
+
+    const auto labelOf = [&labelled](const cv::Point2f& point) {
+        int best_label = 0;
+        float best_distance = pointDistance(point, labelled[0]);
+        for (int label = 1; label < 3; ++label) {
+            const float distance = pointDistance(point,
+                labelled[static_cast<std::size_t>(label)]);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_label = label;
+            }
+        }
+        return best_label;
+    };
+
+    const cv::Point2f& endpoint_a = proposal.image_points[1];
+    const cv::Point2f& endpoint_b = proposal.image_points[2];
+    int canonical_x_label = state_.canonical_x_label;
+    if (!state_.has_large_l_identity || canonical_x_label < 0) {
+        const cv::Point2f& upper_endpoint =
+            endpoint_a.y < endpoint_b.y ||
+            (std::abs(endpoint_a.y - endpoint_b.y) <= 1.0F &&
+             endpoint_a.x < endpoint_b.x) ? endpoint_a : endpoint_b;
+        canonical_x_label = labelOf(upper_endpoint);
+    }
+    const bool a_is_canonical_x = labelOf(endpoint_a) == canonical_x_label;
+    const cv::Point2f& canonical_x_endpoint =
+        a_is_canonical_x ? endpoint_a : endpoint_b;
+    const cv::Point2f& canonical_y_endpoint =
+        a_is_canonical_x ? endpoint_b : endpoint_a;
+    const std::array<cv::Point2f, 3> image_points{{
+        right_angle, canonical_x_endpoint, canonical_y_endpoint}};
+    const cv::Mat affine = cv::getAffineTransform(image_points.data(), canonical.data());
+    Hypothesis candidate = evaluateTransform(
+        asMatx23f(affine), proposal.topology_score,
+        quantizeOrientation(canonical_x_endpoint - right_angle));
+    candidate.large_l_triplet_valid = candidate.valid;
+    candidate.canonical_x_label = canonical_x_label;
+    candidate.large_l_centers = labelled;
+    // This pattern centre is the hypotenuse midpoint. Unlike the physical
+    // board centre, it is invariant to the equal-leg labelling ambiguity.
+    candidate.center = 0.5F * (endpoint_a + endpoint_b);
+    return candidate;
 }
 
 MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
@@ -458,7 +516,7 @@ MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
     };
 
     // All C(n,3) work below is scalar geometry. Only the best proposal reaches
-    // the two 128x128 affine/template evaluations.
+    // one 128x128 affine/template evaluation.
     TripleProposal best_proposal;
     bool has_proposal = false;
     for (std::size_t i = 0; i + 2 < count; ++i) {
@@ -477,8 +535,8 @@ MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
                             static_cast<double>(config_.prediction_horizon_seconds));
                         const cv::Point2f predicted = state_.last_center +
                             state_.velocity_px_per_second * static_cast<float>(dt);
-                        // The board centre is the midpoint of the hypotenuse
-                        // formed by the two non-right-angle L centres.
+                        // The three-L pattern centre is the midpoint of the
+                        // hypotenuse formed by the non-right-angle L centres.
                         const cv::Point2f estimated_center =
                             0.5F * (proposal.image_points[1] + proposal.image_points[2]);
                         const float normalizer = std::max(
@@ -636,6 +694,14 @@ DetectionResult MarkerDetector::process(const cv::Mat& frame,
     }
     DetectionResult result = makeResult(best, confidence, capture_timestamp);
     updateState(result, capture_timestamp);
+    if (result.found && best.large_l_triplet_valid) {
+        state_.has_large_l_identity = true;
+        state_.last_large_l_centers = best.large_l_centers;
+        state_.canonical_x_label = best.canonical_x_label;
+    } else if (!state_.has_observation) {
+        state_.has_large_l_identity = false;
+        state_.canonical_x_label = -1;
+    }
     result.state = state_.mode;
     // Refresh output time after state bookkeeping so latency covers the complete
     // detector call, not just image processing.

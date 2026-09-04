@@ -139,7 +139,7 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
                  cv::LINE_AA);
         cv::line(annotated, centers[1], centers[2], cv::Scalar(0, 255, 0), 2,
                  cv::LINE_AA);
-        constexpr std::array<const char*, 3> labels{{"R", "A", "B"}};
+        constexpr std::array<const char*, 3> labels{{"L0", "L1", "L2"}};
         for (std::size_t i = 0; i < centers.size(); ++i) {
             cv::circle(annotated, centers[i], 5, cv::Scalar(255, 64, 64), 2,
                        cv::LINE_AA);

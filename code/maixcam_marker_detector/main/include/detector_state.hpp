@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 
 #include <opencv2/core.hpp>
@@ -16,6 +17,9 @@ struct DetectorStateData {
     cv::Point2f last_center{};
     cv::Point2f velocity_px_per_second{};
     cv::Rect2f last_bbox{};
+    bool has_large_l_identity = false;
+    std::array<cv::Point2f, 3> last_large_l_centers{};
+    int canonical_x_label = -1;
     SteadyTimePoint last_capture{};
 
     void reset() noexcept { *this = DetectorStateData{}; }

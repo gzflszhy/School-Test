@@ -60,6 +60,7 @@ private:
         cv::Rect2f bbox{};
         cv::Point2f center{};
         bool large_l_triplet_valid = false;
+        int canonical_x_label = -1;
         std::array<cv::Point2f, 3> large_l_centers{};
         std::array<bool, 3> optional_component_detected{};
         std::array<cv::Point2f, 3> optional_component_centers{};
