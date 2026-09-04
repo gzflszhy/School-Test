@@ -45,8 +45,6 @@ public:
     const DetectorDebugSnapshot& debugSnapshot() const noexcept { return debug_snapshot_; }
 
 private:
-    enum class HypothesisPath { LED_TRIPLE, DARK_BOARD };
-
     struct LedCandidate {
         std::vector<cv::Point> contour;
         cv::RotatedRect box;
@@ -58,12 +56,7 @@ private:
 
     struct Hypothesis {
         bool valid = false;
-        float topology_score = 0.0F;
-        float acceptance_score = 0.0F;
         float total_score = 0.0F;
-        cv::Matx23f image_to_canonical{};
-        cv::Matx23f canonical_to_image{};
-        cv::RotatedRect rotated_board{};
         cv::Rect2f bbox{};
         cv::Point2f center{};
         bool large_l_triplet_valid = false;
@@ -72,12 +65,12 @@ private:
         std::array<cv::Point2f, 3> optional_component_centers{};
         MarkerOrientation orientation = MarkerOrientation::UNKNOWN;
         TemplateScore detail{};
-        HypothesisPath path = HypothesisPath::LED_TRIPLE;
     };
 
     struct TripleProposal {
         std::array<cv::Point2f, 3> image_points{};
         float topology_score = 0.0F;
+        float selection_score = 0.0F;
     };
 
     cv::Rect trackingSearchRoi(SteadyTimePoint capture_timestamp) const;
@@ -85,19 +78,16 @@ private:
     int makeLedMask(const cv::Rect& roi);
     std::vector<LedCandidate> findLedCandidates(const cv::Rect& roi);
     Hypothesis findBestLedHypothesis(const std::vector<LedCandidate>& candidates,
-                                     const cv::Rect& roi);
+                                     SteadyTimePoint capture_timestamp);
     bool makeTripleProposal(const LedCandidate& a, const LedCandidate& b,
                             const LedCandidate& c, TripleProposal& proposal) const;
-    Hypothesis evaluateTriple(const TripleProposal& proposal, int& transform_budget);
-    Hypothesis findDarkBoardFallback(const cv::Rect& roi);
+    Hypothesis evaluateTriple(const TripleProposal& proposal);
     Hypothesis evaluateTransform(const cv::Matx23f& image_to_canonical,
                                  float topology_score,
-                                 MarkerOrientation orientation,
-                                 HypothesisPath path);
+                                 MarkerOrientation orientation);
     float temporalScore(const Hypothesis& hypothesis,
                         SteadyTimePoint capture_timestamp) const;
     DetectionResult makeResult(const Hypothesis& hypothesis, float confidence,
-                               float acceptance_confidence,
                                SteadyTimePoint capture_timestamp);
     void updateState(const DetectionResult& result, SteadyTimePoint capture_timestamp);
 
@@ -117,7 +107,6 @@ private:
     std::vector<cv::Point> hull_buffer_;
     std::vector<cv::Point> local_contour_buffer_;
     std::vector<cv::Point2f> board_corner_buffer_;
-    std::vector<TripleProposal> triple_proposals_;
     bool debug_enabled_ = false;
     bool debug_center_overlay_enabled_ = false;
     DetectorDebugSnapshot debug_snapshot_;

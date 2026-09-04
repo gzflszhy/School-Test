@@ -2,9 +2,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
-#include <numeric>
 #include <utility>
 
 #include <opencv2/imgproc.hpp>
@@ -35,16 +33,16 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
     : config_(config), geometry_(std::move(geometry)) {
     config_.normalize();
     const cv::Size canvas(config_.canonical_size, config_.canonical_size);
-    led_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
+    cv::Mat all_led_mask = cv::Mat::zeros(canvas, CV_8UC1);
     large_l_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
-    board_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
+    background_mask_ = cv::Mat::zeros(canvas, CV_8UC1);
     const auto board_corners = geometry_.boardCornersCanonical(config_.canonical_size);
     std::vector<cv::Point> board_polygon;
     board_polygon.reserve(board_corners.size());
     for (const auto& point : board_corners) {
         board_polygon.emplace_back(cvRound(point.x), cvRound(point.y));
     }
-    cv::fillConvexPoly(board_mask_, board_polygon, cv::Scalar(255), cv::LINE_8);
+    cv::fillConvexPoly(background_mask_, board_polygon, cv::Scalar(255), cv::LINE_8);
 
     const auto& components = geometry_.components();
     for (std::size_t i = 0; i < components.size(); ++i) {
@@ -56,7 +54,7 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
         component_masks_[i].setTo(0);
         const std::vector<std::vector<cv::Point>> polygons{polygon};
         cv::fillPoly(component_masks_[i], polygons, cv::Scalar(255), cv::LINE_8);
-        cv::bitwise_or(led_mask_, component_masks_[i], led_mask_);
+        cv::bitwise_or(all_led_mask, component_masks_[i], all_led_mask);
     }
     const auto cad_large_centers = geometry_.largeLCentersMm();
     // CAD indices: 2 is the right-angle vertex, 1 is its +X neighbour and 0
@@ -71,7 +69,7 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
         const int diameter = config_.template_dilate_px * 2 + 1;
         const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE,
                                                          cv::Size(diameter, diameter));
-        cv::dilate(led_mask_, led_mask_, kernel);
+        cv::dilate(all_led_mask, all_led_mask, kernel);
         for (auto& mask : component_masks_) cv::dilate(mask, mask, kernel);
     }
     for (std::size_t i = 0; i < component_masks_.size(); ++i) {
@@ -79,13 +77,12 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
             cv::bitwise_or(large_l_mask_, component_masks_[i], large_l_mask_);
         }
     }
-    board_mask_.setTo(0, led_mask_);
+    // Contrast is measured against the non-LED region inside the CAD outline.
+    // This is not a black-board detector and does not constrain acceptance.
+    background_mask_.setTo(0, all_led_mask);
     for (std::size_t i = 0; i < component_masks_.size(); ++i) {
         component_pixel_counts_[i] = std::max(1, cv::countNonZero(component_masks_[i]));
     }
-    board_pixel_count_ = std::max(1, cv::countNonZero(board_mask_));
-
-    large_l_shape_mask_ = cv::Mat::zeros(cv::Size(64, 64), CV_8UC1);
     const auto& cad_large_l = components[0].polygon_mm;
     float min_x = cad_large_l.front().x;
     float max_x = cad_large_l.front().x;
@@ -105,15 +102,13 @@ MarkerTemplate::MarkerTemplate(const DetectorConfig& config, MarkerGeometry geom
             cvRound(kShapeMargin + kShapeSpan * (point.x - min_x) / (max_x - min_x)),
             cvRound(kShapeMargin + kShapeSpan * (point.y - min_y) / (max_y - min_y)));
     }
-    const std::vector<std::vector<cv::Point>> large_l_polygons{large_l_shape_contour_};
-    cv::fillPoly(large_l_shape_mask_, large_l_polygons, cv::Scalar(255));
 }
 
 TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
                                      cv::Mat& scratch_binary) const {
     TemplateScore result;
     if (canonical_gray.empty() || canonical_gray.type() != CV_8UC1 ||
-        canonical_gray.size() != led_mask_.size()) {
+        canonical_gray.size() != large_l_mask_.size()) {
         return result;
     }
 
@@ -123,8 +118,8 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
     // flat, unsaturated LED plateau can otherwise disappear at its percentile.
     const int high = std::max(0, percentile8u(canonical_gray,
                                               config_.bright_percentile) - 1);
-    const cv::Scalar board_mean_scalar = cv::mean(canonical_gray, board_mask_);
-    const int contrast_threshold = cvRound(board_mean_scalar[0] +
+    const cv::Scalar background_mean = cv::mean(canonical_gray, background_mask_);
+    const int contrast_threshold = cvRound(background_mean[0] +
                                            config_.local_contrast_threshold);
     const int threshold = std::clamp(std::max({static_cast<int>(otsu), high,
                                                 contrast_threshold}),
@@ -132,8 +127,6 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
                                      config_.max_led_threshold);
     cv::threshold(canonical_gray, scratch_binary, threshold, 255, cv::THRESH_BINARY);
 
-    float weighted_coverage = 0.0F;
-    float weight_sum = 0.0F;
     float large_coverage = 0.0F;
     float optional_coverage = 0.0F;
     int large_count = 0;
@@ -144,25 +137,24 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
         const int observed_pixels = cv::countNonZero(overlap_scratch_);
         const float coverage = static_cast<float>(observed_pixels) /
                                static_cast<float>(expected);
-        result.coverage[i] = coverage;
         const bool is_large = geometry_.components()[i].kind == ComponentKind::LARGE_L;
         const float required = is_large ? config_.min_large_component_coverage
                                         : config_.min_small_component_coverage;
         if (coverage >= required) {
-            ++result.matched_components;
-            if (is_large) ++result.matched_large_components;
+            if (!is_large) ++result.matched_optional_components;
             result.component_detected[i] = true;
-            const cv::Moments moments = cv::moments(overlap_scratch_, true);
-            if (moments.m00 > 0.0) {
-                result.component_centers_canonical[i] = {
-                    static_cast<float>(moments.m10 / moments.m00),
-                    static_cast<float>(moments.m01 / moments.m00)};
+            // Large-L centres already come from the source contours. Moments
+            // are only needed for the three optional refinement features.
+            if (!is_large) {
+                const cv::Moments moments = cv::moments(overlap_scratch_, true);
+                if (moments.m00 > 0.0) {
+                    result.component_centers_canonical[i] = {
+                        static_cast<float>(moments.m10 / moments.m00),
+                        static_cast<float>(moments.m01 / moments.m00)};
+                }
             }
         }
-        const float weight = is_large ? config_.large_template_coverage_weight : 1.0F;
         const float normalized_coverage = clamp01(coverage / std::max(0.01F, required));
-        weighted_coverage += weight * normalized_coverage;
-        weight_sum += weight;
         if (is_large) {
             large_coverage += normalized_coverage;
             ++large_count;
@@ -171,7 +163,6 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
             ++optional_count;
         }
     }
-    result.template_score = weight_sum > 0.0F ? weighted_coverage / weight_sum : 0.0F;
     result.large_l_template_score = large_count > 0
         ? large_coverage / static_cast<float>(large_count) : 0.0F;
     result.optional_template_score = optional_count > 0
@@ -180,26 +171,10 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
     // Primary contrast must depend only on the three required large Ls. The
     // optional code marks may be off, occluded or outside their ideal masks.
     const double led_mean = cv::mean(canonical_gray, large_l_mask_)[0];
-    const double board_mean = board_mean_scalar[0];
-    result.contrast_score = clamp01(static_cast<float>(led_mean - board_mean) /
+    const double background_intensity = background_mean[0];
+    result.contrast_score = clamp01(static_cast<float>(led_mean - background_intensity) /
                                     std::max(1.0F, config_.contrast_score_full_scale *
                                                        config_.min_led_board_contrast));
-
-    cv::compare(canonical_gray, std::min(threshold - 1, config_.dark_board_max_threshold),
-                dark_scratch_, cv::CMP_LT);
-    cv::bitwise_and(dark_scratch_, board_mask_, dark_scratch_);
-    result.black_board_score = clamp01(
-        static_cast<float>(cv::countNonZero(dark_scratch_)) /
-        static_cast<float>(board_pixel_count_) /
-        std::max(0.01F, config_.min_black_board_fraction));
-
-    cv::bitwise_and(scratch_binary, board_mask_, outside_scratch_);
-    result.extra_bright_fraction = static_cast<float>(cv::countNonZero(outside_scratch_)) /
-                                   static_cast<float>(board_pixel_count_);
-    if (result.extra_bright_fraction > config_.max_extra_bright_fraction) {
-        result.template_score *= clamp01(1.0F -
-            (result.extra_bright_fraction - config_.max_extra_bright_fraction));
-    }
 
     cv::compare(canonical_gray, config_.saturation_threshold, saturated_scratch_, cv::CMP_GE);
     result.saturation_fraction = static_cast<float>(cv::countNonZero(saturated_scratch_)) /

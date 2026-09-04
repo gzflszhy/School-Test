@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <numeric>
 #include <utility>
 
 #include <opencv2/imgproc.hpp>
@@ -308,28 +307,21 @@ std::vector<MarkerDetector::LedCandidate> MarkerDetector::findLedCandidates(
 
 MarkerDetector::Hypothesis MarkerDetector::evaluateTransform(
     const cv::Matx23f& image_to_canonical, float topology_score,
-    MarkerOrientation orientation, HypothesisPath path) {
+    MarkerOrientation orientation) {
     Hypothesis hypothesis;
     cv::warpAffine(gray_, canonical_gray_, cv::Mat(image_to_canonical),
                    cv::Size(config_.canonical_size, config_.canonical_size),
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(127));
     hypothesis.detail = marker_template_.score(canonical_gray_, canonical_binary_);
-    const bool pattern_valid = path == HypothesisPath::LED_TRIPLE ||
-        (hypothesis.detail.matched_large_components == 3 &&
-         hypothesis.detail.large_l_template_score >= config_.fallback_min_template_score &&
-         hypothesis.detail.contrast_score >= config_.fallback_min_contrast_score &&
-         hypothesis.detail.black_board_score >= config_.fallback_min_black_board_score);
-    if (!pattern_valid) return hypothesis;
 
     cv::invertAffineTransform(cv::Mat(image_to_canonical), affine_inverse_);
-    hypothesis.image_to_canonical = image_to_canonical;
-    hypothesis.canonical_to_image = asMatx23f(affine_inverse_);
+    const cv::Matx23f canonical_to_image = asMatx23f(affine_inverse_);
     for (std::size_t i = 0; i < hypothesis.optional_component_detected.size(); ++i) {
         const std::size_t component_index = i + 3;
         if (hypothesis.detail.component_detected[component_index]) {
             hypothesis.optional_component_detected[i] = true;
             hypothesis.optional_component_centers[i] = transformPoint(
-                hypothesis.canonical_to_image,
+                canonical_to_image,
                 hypothesis.detail.component_centers_canonical[component_index]);
         }
     }
@@ -337,49 +329,27 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTransform(
     const auto canonical_corners = marker_template_.geometry().boardCornersCanonical(
         config_.canonical_size);
     for (std::size_t i = 0; i < board_corner_buffer_.size(); ++i) {
-        board_corner_buffer_[i] = transformPoint(hypothesis.canonical_to_image,
+        board_corner_buffer_[i] = transformPoint(canonical_to_image,
                                                  canonical_corners[i]);
     }
-    hypothesis.rotated_board = cv::minAreaRect(board_corner_buffer_);
     const std::array<cv::Point2f, 4> image_corners{{board_corner_buffer_[0],
                                                     board_corner_buffer_[1],
                                                     board_corner_buffer_[2],
                                                     board_corner_buffer_[3]}};
     hypothesis.bbox = boundingRect2f(image_corners);
-    hypothesis.center = transformPoint(hypothesis.canonical_to_image,
+    hypothesis.center = transformPoint(canonical_to_image,
                                        {last * 0.5F, last * 0.5F});
-    hypothesis.topology_score = clamp01(topology_score);
-    if (path == HypothesisPath::LED_TRIPLE) {
-        hypothesis.acceptance_score =
-            config_.topology_weight * hypothesis.topology_score +
-            config_.template_weight * hypothesis.detail.large_l_template_score +
-            config_.contrast_weight * hypothesis.detail.contrast_score;
-        const float optional_evidence = std::max(
-            hypothesis.detail.optional_template_score,
-            hypothesis.detail.black_board_score);
-        hypothesis.total_score = hypothesis.acceptance_score +
-                                 config_.optional_evidence_weight * optional_evidence;
-    } else {
-        hypothesis.acceptance_score =
-            config_.topology_weight * hypothesis.topology_score +
-            config_.template_weight * hypothesis.detail.large_l_template_score +
-            config_.contrast_weight * hypothesis.detail.contrast_score +
-            config_.black_board_weight * hypothesis.detail.black_board_score;
-        hypothesis.total_score = hypothesis.acceptance_score;
-    }
+    const float normalized_topology = clamp01(topology_score);
+    hypothesis.total_score =
+        config_.topology_weight * normalized_topology +
+        config_.template_weight * hypothesis.detail.large_l_template_score +
+        config_.contrast_weight * hypothesis.detail.contrast_score +
+        config_.optional_evidence_weight * hypothesis.detail.optional_template_score;
     hypothesis.orientation = orientation;
-    hypothesis.path = path;
     const bool size_valid = hypothesis.bbox.width >= config_.min_marker_width_px &&
                             hypothesis.bbox.width <= config_.max_marker_width_px *
                                                          config_.hypothesis_max_width_factor;
-    // A topology-valid three-L observation is sufficient. Scene clutter is
-    // retained as optional scoring evidence and as a guard for the board-only
-    // fallback, but it cannot veto a directly observed large-L triple.
-    const bool clutter_valid = hypothesis.detail.extra_bright_fraction <=
-                               config_.max_extra_bright_fraction *
-                                   config_.extra_bright_reject_factor;
-    hypothesis.valid = size_valid &&
-                       (path == HypothesisPath::LED_TRIPLE || clutter_valid);
+    hypothesis.valid = size_valid;
     return hypothesis;
 }
 
@@ -442,10 +412,10 @@ bool MarkerDetector::makeTripleProposal(const LedCandidate& a, const LedCandidat
 }
 
 MarkerDetector::Hypothesis MarkerDetector::evaluateTriple(
-    const TripleProposal& proposal, int& transform_budget) {
+    const TripleProposal& proposal) {
     const auto& canonical = marker_template_.largeLCentersPx();
     Hypothesis best;
-    for (int swap = 0; swap < 2 && transform_budget > 0; ++swap) {
+    for (int swap = 0; swap < 2; ++swap) {
         const cv::Point2f& r = proposal.image_points[0];
         const cv::Point2f& p = proposal.image_points[1];
         const cv::Point2f& q = proposal.image_points[2];
@@ -453,11 +423,9 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTriple(
             ? std::array<cv::Point2f, 3>{{r, p, q}}
             : std::array<cv::Point2f, 3>{{r, q, p}};
         const cv::Mat affine = cv::getAffineTransform(image_points.data(), canonical.data());
-        --transform_budget;
         Hypothesis candidate = evaluateTransform(
             asMatx23f(affine), proposal.topology_score,
-            quantizeOrientation(image_points[1] - image_points[0]),
-            HypothesisPath::LED_TRIPLE);
+            quantizeOrientation(image_points[1] - image_points[0]));
         candidate.large_l_triplet_valid = candidate.valid;
         candidate.large_l_centers = image_points;
         if (candidate.valid && (!best.valid || candidate.total_score > best.total_score)) {
@@ -468,8 +436,7 @@ MarkerDetector::Hypothesis MarkerDetector::evaluateTriple(
 }
 
 MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
-    const std::vector<LedCandidate>& candidates, const cv::Rect& /*roi*/) {
-    Hypothesis best;
+    const std::vector<LedCandidate>& candidates, SteadyTimePoint capture_timestamp) {
     const std::size_t count = std::min(candidates.size(),
         static_cast<std::size_t>(config_.max_topology_candidates));
     const auto pair_can_belong = [this](const LedCandidate& lhs,
@@ -490,12 +457,10 @@ MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
                (distance_scale >= diagonal_min && distance_scale <= diagonal_max);
     };
 
-    // All C(n,3) work below is scalar geometry. Only topology-valid proposals
-    // reach warpAffine, in descending cheap-score order.
-    triple_proposals_.clear();
-    const std::size_t maximum_proposals = count >= 3
-        ? count * (count - 1) * (count - 2) / 6 : 0;
-    triple_proposals_.reserve(maximum_proposals);
+    // All C(n,3) work below is scalar geometry. Only the best proposal reaches
+    // the two 128x128 affine/template evaluations.
+    TripleProposal best_proposal;
+    bool has_proposal = false;
     for (std::size_t i = 0; i + 2 < count; ++i) {
         for (std::size_t j = i + 1; j + 1 < count; ++j) {
             for (std::size_t k = j + 1; k < count; ++k) {
@@ -503,110 +468,37 @@ MarkerDetector::Hypothesis MarkerDetector::findBestLedHypothesis(
                     !pair_can_belong(candidates[i], candidates[k]) ||
                     !pair_can_belong(candidates[j], candidates[k])) continue;
                 TripleProposal proposal;
-                if (makeTripleProposal(candidates[i], candidates[j], candidates[k], proposal))
-                    triple_proposals_.push_back(proposal);
+                if (makeTripleProposal(candidates[i], candidates[j], candidates[k], proposal)) {
+                    proposal.selection_score = proposal.topology_score;
+                    if (state_.has_observation) {
+                        double dt = std::chrono::duration<double>(
+                            capture_timestamp - state_.last_capture).count();
+                        dt = std::clamp(dt, 0.0,
+                            static_cast<double>(config_.prediction_horizon_seconds));
+                        const cv::Point2f predicted = state_.last_center +
+                            state_.velocity_px_per_second * static_cast<float>(dt);
+                        // The board centre is the midpoint of the hypotenuse
+                        // formed by the two non-right-angle L centres.
+                        const cv::Point2f estimated_center =
+                            0.5F * (proposal.image_points[1] + proposal.image_points[2]);
+                        const float normalizer = std::max(
+                            config_.temporal_min_normalizer_px,
+                            state_.last_bbox.width *
+                                config_.max_tracking_displacement_bbox);
+                        proposal.selection_score += config_.temporal_weight * clamp01(
+                            1.0F - pointDistance(estimated_center, predicted) / normalizer);
+                    }
+                    if (!has_proposal ||
+                        proposal.selection_score > best_proposal.selection_score) {
+                        best_proposal = proposal;
+                        has_proposal = true;
+                    }
+                }
             }
         }
     }
-    std::sort(triple_proposals_.begin(), triple_proposals_.end(),
-              [](const TripleProposal& lhs, const TripleProposal& rhs) {
-                  return lhs.topology_score > rhs.topology_score;
-              });
-    int transform_budget = config_.max_led_transform_evaluations;
-    for (const auto& proposal : triple_proposals_) {
-        if (transform_budget <= 0) break;
-        Hypothesis candidate = evaluateTriple(proposal, transform_budget);
-        if (candidate.valid && (!best.valid || candidate.total_score > best.total_score))
-            best = std::move(candidate);
-    }
-    return best;
-}
-
-MarkerDetector::Hypothesis MarkerDetector::findDarkBoardFallback(const cv::Rect& roi) {
-    const cv::Mat source = gray_(roi);
-    const double otsu = cv::threshold(source, roi_binary_, 0, 255,
-                                      cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
-    const int threshold = std::min(static_cast<int>(otsu), config_.dark_board_max_threshold);
-    cv::threshold(source, roi_binary_, threshold, 255, cv::THRESH_BINARY_INV);
-    if (config_.morphology_kernel > 1) {
-        cv::morphologyEx(roi_binary_, roi_binary_, cv::MORPH_CLOSE, morphology_kernel_);
-    }
-    contour_buffer_.clear();
-    cv::findContours(roi_binary_, contour_buffer_, cv::RETR_EXTERNAL,
-                     cv::CHAIN_APPROX_SIMPLE, roi.tl());
-
-    struct BoardCandidate { cv::RotatedRect box; float score; };
-    std::vector<BoardCandidate> boards;
-    for (const auto& contour : contour_buffer_) {
-        const float area = static_cast<float>(std::abs(cv::contourArea(contour)));
-        if (area <= 0.0F) continue;
-        const cv::RotatedRect box = cv::minAreaRect(contour);
-        const float width = std::max(box.size.width, box.size.height);
-        const float height = std::max(1.0F, std::min(box.size.width, box.size.height));
-        if (width < config_.min_marker_width_px || width > config_.max_marker_width_px ||
-            height < config_.min_marker_width_px *
-                         config_.dark_board_min_height_width_fraction) continue;
-        const float aspect = width / height;
-        if (aspect < config_.dark_board_aspect_min || aspect > config_.dark_board_aspect_max)
-            continue;
-        const float rectangularity = area / std::max(1.0F, width * height);
-        if (rectangularity < config_.dark_board_rectangularity_min) continue;
-        const cv::Rect bounds = clampRect(cv::boundingRect(contour), gray_.size());
-        if (bounds.area() <= 0) continue;
-        const double mean_intensity = cv::mean(gray_(bounds))[0];
-        double max_intensity = 0.0;
-        cv::minMaxLoc(gray_(bounds), nullptr, &max_intensity);
-        const float bright_delta = static_cast<float>(max_intensity - mean_intensity);
-        if (bright_delta < config_.fallback_min_candidate_bright_delta) continue;
-        const float bright_range_score = clamp01(
-            bright_delta / std::max(1.0F, config_.contrast_score_full_scale *
-                config_.fallback_min_candidate_bright_delta));
-        const float board_score =
-            config_.fallback_board_rectangularity_weight * clamp01(rectangularity) +
-            config_.fallback_board_bright_range_weight * bright_range_score;
-        boards.push_back({box, board_score});
-    }
-    std::sort(boards.begin(), boards.end(), [](const BoardCandidate& lhs,
-                                                const BoardCandidate& rhs) {
-        return lhs.score > rhs.score;
-    });
-    if (boards.size() > static_cast<std::size_t>(config_.max_board_candidates))
-        boards.resize(static_cast<std::size_t>(config_.max_board_candidates));
-
-    Hypothesis best;
-    int transform_budget = config_.max_board_transform_evaluations;
-    const auto canonical = marker_template_.geometry().boardCornersCanonical(
-        config_.canonical_size);
-    for (const auto& board : boards) {
-        if (transform_budget <= 0) break;
-        std::array<cv::Point2f, 4> points{};
-        board.box.points(points.data());
-        const cv::Point2f centre = board.box.center;
-        std::sort(points.begin(), points.end(), [centre](const cv::Point2f& lhs,
-                                                        const cv::Point2f& rhs) {
-            return std::atan2(lhs.y - centre.y, lhs.x - centre.x) <
-                   std::atan2(rhs.y - centre.y, rhs.x - centre.x);
-        });
-        for (int offset = 0; offset < 4 && transform_budget > 0; ++offset) {
-            const std::array<cv::Point2f, 3> image_points{{
-                points[static_cast<std::size_t>(offset)],
-                points[static_cast<std::size_t>((offset + 1) & 3)],
-                points[static_cast<std::size_t>((offset + 3) & 3)]}};
-            const std::array<cv::Point2f, 3> canonical_points{{canonical[0], canonical[1],
-                                                               canonical[3]}};
-            const cv::Mat affine = cv::getAffineTransform(image_points.data(),
-                                                           canonical_points.data());
-            --transform_budget;
-            Hypothesis candidate = evaluateTransform(
-                asMatx23f(affine), config_.fallback_topology_score * board.score,
-                quantizeOrientation(image_points[1] - image_points[0]),
-                HypothesisPath::DARK_BOARD);
-            if (candidate.valid && (!best.valid || candidate.total_score > best.total_score)) {
-                best = std::move(candidate);
-            }
-        }
-    }
-    return best;
+    if (!has_proposal) return {};
+    return evaluateTriple(best_proposal);
 }
 
 float MarkerDetector::temporalScore(const Hypothesis& hypothesis,
@@ -623,32 +515,12 @@ float MarkerDetector::temporalScore(const Hypothesis& hypothesis,
 }
 
 DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float confidence,
-                                           float acceptance_confidence,
                                            SteadyTimePoint capture_timestamp) {
     DetectionResult result;
     result.capture_timestamp = capture_timestamp;
     result.confidence = clamp01(confidence);
     result.state = state_.mode;
-    float threshold = state_.mode == DetectorState::TRACK_ROI
-                                ? config_.track_exit_threshold
-                                : config_.trackable_threshold;
-    if (hypothesis.path == HypothesisPath::DARK_BOARD) {
-        threshold = std::max(threshold, config_.fallback_trackable_threshold);
-    }
-    const bool primary_pattern_valid =
-        hypothesis.path == HypothesisPath::LED_TRIPLE &&
-        hypothesis.large_l_triplet_valid;
-    const bool fallback_pattern_valid =
-        hypothesis.path == HypothesisPath::DARK_BOARD &&
-        hypothesis.detail.matched_large_components == 3 &&
-        hypothesis.detail.large_l_template_score >= config_.fallback_min_template_score &&
-        hypothesis.detail.contrast_score >= config_.fallback_min_contrast_score &&
-        hypothesis.detail.black_board_score >= config_.fallback_min_black_board_score;
-    result.found = hypothesis.valid &&
-        (primary_pattern_valid ||
-         (fallback_pattern_valid &&
-          hypothesis.detail.contrast_score > config_.min_detection_contrast_score &&
-          acceptance_confidence >= threshold));
+    result.found = hypothesis.valid && hypothesis.large_l_triplet_valid;
     if (result.found) {
         result.bbox = hypothesis.bbox & cv::Rect2f(0.0F, 0.0F,
                                                     static_cast<float>(gray_.cols),
@@ -657,11 +529,9 @@ DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float c
         result.error_x_px = result.center.x - config_.optical_center_x;
         result.error_x_norm = result.error_x_px /
                               std::max(1.0F, 0.5F * static_cast<float>(config_.frame_width));
-        result.matched_large_components = primary_pattern_valid
-            ? 3 : hypothesis.detail.matched_large_components;
-        result.matched_optional_components = std::max(
-            0, hypothesis.detail.matched_components -
-                   hypothesis.detail.matched_large_components);
+        result.matched_large_components = 3;
+        result.matched_optional_components =
+            hypothesis.detail.matched_optional_components;
         result.matched_components = result.matched_large_components +
                                     result.matched_optional_components;
         for (std::size_t i = 0; i < result.optional_component_detected.size(); ++i) {
@@ -671,10 +541,8 @@ DetectionResult MarkerDetector::makeResult(const Hypothesis& hypothesis, float c
         }
         result.saturation_fraction = hypothesis.detail.saturation_fraction;
         const int matched_small = result.matched_optional_components;
-        const int required_full_id_components = hypothesis.path == HypothesisPath::DARK_BOARD
-            ? config_.fallback_full_id_min_components : config_.full_id_min_components;
         if (result.confidence >= config_.full_id_threshold &&
-            result.matched_components >= required_full_id_components &&
+            result.matched_components >= config_.full_id_min_components &&
             matched_small >= 2) {
             result.quality = DetectionQuality::FULL_ID;
             result.orientation = hypothesis.orientation;
@@ -719,14 +587,6 @@ void MarkerDetector::updateState(const DetectionResult& result,
         state_.last_center = result.center;
         state_.last_bbox = result.bbox;
         state_.last_capture = capture_timestamp;
-        if (state_.mode == DetectorState::TRACK_ROI &&
-            state_.lost_count >= config_.return_to_search_lost_frames) {
-            state_.mode = DetectorState::SEARCH_FULL;
-            state_.confirmation_count = 0;
-            state_.lost_count = 0;
-            state_.has_observation = false;
-            state_.velocity_px_per_second = {};
-        }
     } else if (state_.mode == DetectorState::TRACK_ROI) {
         ++state_.lost_count;
         if (state_.lost_count >= config_.return_to_search_lost_frames) {
@@ -757,24 +617,16 @@ DetectionResult MarkerDetector::process(const cv::Mat& frame,
     makeGray(frame);
     Hypothesis best;
     float confidence = 0.0F;
-    float acceptance_confidence = 0.0F;
     if (!gray_.empty()) {
         const cv::Rect roi = trackingSearchRoi(capture_timestamp);
         if (roi.width >= config_.min_marker_width_px &&
             roi.height >= config_.min_marker_width_px) {
             const auto candidates = findLedCandidates(roi);
-            best = findBestLedHypothesis(candidates, roi);
-            if (!best.valid) {
-                Hypothesis fallback = findDarkBoardFallback(roi);
-                if (fallback.valid && (!best.valid || fallback.total_score > best.total_score)) {
-                    best = std::move(fallback);
-                }
-            }
+            best = findBestLedHypothesis(candidates, capture_timestamp);
             if (best.valid) {
                 const float temporal = config_.temporal_weight *
                                        temporalScore(best, capture_timestamp);
                 confidence = best.total_score + temporal;
-                acceptance_confidence = best.acceptance_score + temporal;
                 if (debug_center_overlay_enabled_ && best.large_l_triplet_valid) {
                     debug_snapshot_.selected_triplet_valid = true;
                     debug_snapshot_.selected_large_l_centers = best.large_l_centers;
@@ -782,8 +634,7 @@ DetectionResult MarkerDetector::process(const cv::Mat& frame,
             }
         }
     }
-    DetectionResult result = makeResult(best, confidence, acceptance_confidence,
-                                        capture_timestamp);
+    DetectionResult result = makeResult(best, confidence, capture_timestamp);
     updateState(result, capture_timestamp);
     result.state = state_.mode;
     // Refresh output time after state bookkeeping so latency covers the complete

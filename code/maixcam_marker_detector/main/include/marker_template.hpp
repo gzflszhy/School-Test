@@ -11,16 +11,11 @@
 namespace maixcam_marker {
 
 struct TemplateScore {
-    float template_score = 0.0F;
     float large_l_template_score = 0.0F;
     float optional_template_score = 0.0F;
     float contrast_score = 0.0F;
-    float black_board_score = 0.0F;
-    float extra_bright_fraction = 1.0F;
     float saturation_fraction = 0.0F;
-    int matched_components = 0;
-    int matched_large_components = 0;
-    std::array<float, MarkerGeometry::kComponentCount> coverage{};
+    int matched_optional_components = 0;
     std::array<bool, MarkerGeometry::kComponentCount> component_detected{};
     std::array<cv::Point2f, MarkerGeometry::kComponentCount> component_centers_canonical{};
 };
@@ -30,9 +25,6 @@ public:
     explicit MarkerTemplate(const DetectorConfig& config,
                             MarkerGeometry geometry = MarkerGeometry{});
 
-    const cv::Mat& ledMask() const noexcept { return led_mask_; }
-    const cv::Mat& boardMask() const noexcept { return board_mask_; }
-    const cv::Mat& largeLShapeMask() const noexcept { return large_l_shape_mask_; }
     const std::vector<cv::Point>& largeLShapeContour() const noexcept {
         return large_l_shape_contour_;
     }
@@ -48,19 +40,14 @@ public:
 private:
     DetectorConfig config_;
     MarkerGeometry geometry_;
-    cv::Mat led_mask_;
     cv::Mat large_l_mask_;
-    cv::Mat board_mask_;
-    cv::Mat large_l_shape_mask_;
+    cv::Mat background_mask_;
     std::vector<cv::Point> large_l_shape_contour_;
     std::array<cv::Mat, MarkerGeometry::kComponentCount> component_masks_{};
     std::array<int, MarkerGeometry::kComponentCount> component_pixel_counts_{};
-    int board_pixel_count_ = 1;
     std::array<cv::Point2f, 3> large_l_centers_px_{};
     mutable cv::Mat otsu_scratch_;
     mutable cv::Mat overlap_scratch_;
-    mutable cv::Mat dark_scratch_;
-    mutable cv::Mat outside_scratch_;
     mutable cv::Mat saturated_scratch_;
 };
 

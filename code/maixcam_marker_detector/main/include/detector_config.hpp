@@ -9,8 +9,6 @@ namespace maixcam_marker {
 // All tunable values live here so field calibration never requires changing
 // the detector implementation. Pixel limits refer to the 480x270 input image.
 struct DetectorConfig {
-    static constexpr int kMaxTotalTransformEvaluations = 10;
-
     // GC4653 is sampled at 720p/60 by the ISP and scaled to this lower-cost
     // detector stream. The target is expected to remain reasonably close.
     int frame_width = 480;
@@ -20,8 +18,6 @@ struct DetectorConfig {
     int camera_warmup_frames = 30;
     bool use_auto_exposure = true;
     int exposure_us = 1500;
-    float analogue_gain = 1.0F;
-    float digital_gain = 1.0F;
 
     int min_marker_width_px = 28;
     int max_marker_width_px = 210;
@@ -33,10 +29,6 @@ struct DetectorConfig {
     int max_topology_candidates = 9;
     // Only this many contours reach convexHull/matchShapes.
     int max_pre_shape_candidates = 18;
-    // Full 128x128 warp/template evaluations. normalize() enforces the
-    // non-overridable total cap kMaxTotalTransformEvaluations; the default
-    // split is 6 LED + 4 board.
-    int max_led_transform_evaluations = 6;
 
     // LED segmentation. The final threshold is derived from Otsu, a high
     // percentile and the local mean, then clamped to this interval.
@@ -45,7 +37,6 @@ struct DetectorConfig {
     int max_led_threshold = 250;
     int local_contrast_threshold = 24;
     int saturation_threshold = 250;
-    float max_saturation_fraction = 0.32F;
     int morphology_kernel = 3;
 
     // Large-L contour filtering and scoring.
@@ -88,33 +79,22 @@ struct DetectorConfig {
     int template_dilate_px = 2;
     float min_large_component_coverage = 0.42F;
     float min_small_component_coverage = 0.30F;
-    float max_extra_bright_fraction = 0.38F;
     float min_led_board_contrast = 18.0F;
-    float min_black_board_fraction = 0.30F;
     float contrast_score_full_scale = 3.0F;
-    float large_template_coverage_weight = 2.0F;
-    float min_detection_contrast_score = 0.12F;
     float hypothesis_max_width_factor = 1.35F;
-    float extra_bright_reject_factor = 1.80F;
 
-    // Acceptance uses only the three large Ls: topology + large-L template +
-    // contrast. Optional small marks/board can raise reported confidence but
-    // can never turn a rejected large-L triple into an accepted detection.
+    // A valid three-L geometry is accepted. Template, contrast, optional marks
+    // and temporal continuity only describe confidence/ranking.
     float topology_weight = 0.70F;
     float template_weight = 0.20F;
     float contrast_weight = 0.10F;
     float optional_evidence_weight = 0.05F;
-    float black_board_weight = 0.10F;
     float temporal_weight = 0.10F;
     float no_history_temporal_score = 0.50F;
     float temporal_min_normalizer_px = 8.0F;
-    float trackable_threshold = 0.54F;
     float full_id_threshold = 0.72F;
     int full_id_min_components = 5;
 
-    float search_strong_threshold = 0.66F;
-    float track_hold_threshold = 0.50F;
-    float track_exit_threshold = 0.40F;
     float tracking_roi_scale = 2.10F;
     float tracking_roi_lost_scale = 3.00F;
     float max_tracking_displacement_bbox = 1.50F;
@@ -125,31 +105,8 @@ struct DetectorConfig {
     int expand_after_lost_frames = 1;
     int return_to_search_lost_frames = 6;
 
-    // Dark-board fallback.
-    int dark_board_max_threshold = 100;
-    float dark_board_aspect_min = 0.65F;
-    float dark_board_aspect_max = 1.55F;
-    float dark_board_rectangularity_min = 0.58F;
-    float dark_board_min_height_width_fraction = 0.65F;
-    float fallback_topology_score = 0.45F;
-    int max_board_candidates = 6;
-    int max_board_transform_evaluations = 4;
-    int fallback_min_large_components = 3;
-    int fallback_min_total_components = 3;
-    int fallback_full_id_min_components = 6;
-    float fallback_min_template_score = 0.52F;
-    float fallback_min_contrast_score = 0.24F;
-    float fallback_min_black_board_score = 0.45F;
-    float fallback_trackable_threshold = 0.60F;
-    float fallback_min_candidate_bright_delta = 20.0F;
-    float fallback_board_rectangularity_weight = 0.60F;
-    float fallback_board_bright_range_weight = 0.40F;
-
     float optical_center_x = 240.0F;
-    float optical_center_y = 135.0F;
     bool benchmark_enabled = true;
-    bool debug_enabled = false;
-    bool failure_recorder_enabled = false;
     std::size_t benchmark_window = 600;
 
     void normalize() {
@@ -170,12 +127,6 @@ struct DetectorConfig {
                                               max_led_candidates);
         max_pre_shape_candidates = std::max(max_led_candidates,
                                              max_pre_shape_candidates);
-        max_led_transform_evaluations = std::clamp(
-            max_led_transform_evaluations, 1, kMaxTotalTransformEvaluations - 1);
-        max_board_transform_evaluations = std::clamp(
-            max_board_transform_evaluations, 1,
-            kMaxTotalTransformEvaluations - max_led_transform_evaluations);
-        max_board_candidates = std::max(1, max_board_candidates);
         search_confirm_frames = std::max(1, search_confirm_frames);
         expand_after_lost_frames = std::max(1, expand_after_lost_frames);
         return_to_search_lost_frames = std::max(expand_after_lost_frames,
@@ -196,38 +147,12 @@ struct DetectorConfig {
                                                    pythagorean_relative_error_max);
         min_large_component_coverage = std::max(0.01F, min_large_component_coverage);
         min_small_component_coverage = std::max(0.01F, min_small_component_coverage);
-        min_black_board_fraction = std::max(0.01F, min_black_board_fraction);
         prediction_horizon_seconds = std::max(0.0F, prediction_horizon_seconds);
         velocity_update_max_dt_seconds = std::max(0.01F,
                                                    velocity_update_max_dt_seconds);
-        track_exit_threshold = std::clamp(track_exit_threshold, 0.0F, 1.0F);
-        track_hold_threshold = std::clamp(track_hold_threshold,
-                                          track_exit_threshold, 1.0F);
-        trackable_threshold = std::clamp(trackable_threshold,
-                                         track_hold_threshold, 1.0F);
-        search_strong_threshold = std::clamp(search_strong_threshold,
-                                             trackable_threshold, 1.0F);
-        full_id_threshold = std::clamp(full_id_threshold,
-                                       trackable_threshold, 1.0F);
-        fallback_min_large_components = std::clamp(fallback_min_large_components, 1, 3);
-        fallback_min_total_components = std::clamp(fallback_min_total_components,
-                                                    fallback_min_large_components, 6);
-        fallback_full_id_min_components = std::clamp(fallback_full_id_min_components,
-                                                      fallback_min_total_components, 6);
-        fallback_trackable_threshold = std::clamp(fallback_trackable_threshold,
-                                                   trackable_threshold, 1.0F);
-        fallback_min_template_score = std::clamp(fallback_min_template_score,
-                                                  0.0F, 1.0F);
-        fallback_min_contrast_score = std::clamp(fallback_min_contrast_score,
-                                                  0.0F, 1.0F);
-        fallback_min_black_board_score = std::clamp(fallback_min_black_board_score,
-                                                     0.0F, 1.0F);
-        fallback_min_candidate_bright_delta = std::max(1.0F,
-                                                        fallback_min_candidate_bright_delta);
+        full_id_threshold = std::clamp(full_id_threshold, 0.0F, 1.0F);
         optical_center_x = std::clamp(optical_center_x, 0.0F,
                                       static_cast<float>(frame_width));
-        optical_center_y = std::clamp(optical_center_y, 0.0F,
-                                      static_cast<float>(frame_height));
         benchmark_window = std::max<std::size_t>(16, benchmark_window);
         previous_velocity_weight = std::clamp(previous_velocity_weight, 0.0F, 1.0F);
     }
