@@ -53,7 +53,9 @@ lateral_error_m = -(refined_center_x_px - principal_x_px)
 - 绿色十字：仅由三个大 L 得到的几何中心。
 - 青色菱形：可选小部件一致性检查通过后的修正中心。
 
-状态行还显示滤波横向误差 `x`、估计相对横向速度 `vrel` 和标称距离 `z`。
+青色竖线是目标中心，左右两条暗黄色竖线是按当前距离换算出的中心死区。状态行还
+显示滤波横向误差 `x`、标称距离 `z`，以及位置比例 `P`、积分 `I`、相对速度前馈
+`V` 三项。`SAT` 表示速度限幅，`SLEW` 表示加速度限幅。
 
 ## 4. JSON字段
 
@@ -70,6 +72,11 @@ lateral_error_m = -(refined_center_x_px - principal_x_px)
 | `lateral_error_raw_m` | 当前帧原始横向误差，左正右负 |
 | `lateral_error_filtered_m` | α-β滤波后的横向误差 |
 | `relative_lateral_velocity_mps` | 目标相对相机的横向速度估计 |
+| `vy_position_mps` | 中心位置比例项 P |
+| `vy_integral_mps` | 为消除运动中稳态偏差而保留的积分项 I |
+| `vy_velocity_mps` | 相对速度前馈项 V |
+| `command_saturated` | 限制前命令是否超过速度上限 |
+| `acceleration_limited` | 本帧命令是否受到变化率限制 |
 | `geometric_center_x_px` | 三大 L 斜边中点 |
 | `refined_center_x_px` | 小部件修正后的中心 |
 | `optional_refinement_used` | 本帧是否实际应用小部件修正 |
@@ -126,12 +133,19 @@ v = v + beta / dt * innovation
 ### 控制器
 
 ```text
-vy_raw = lateral_kp_per_s * deadbanded_position
-         + relative_velocity_gain * relative_velocity
+P = lateral_kp_per_s * deadbanded_position
+I = clamp(I + lateral_ki_per_s2 * deadbanded_position * dt)
+V = relative_velocity_gain * relative_velocity
+vy_raw = P + I + V
 ```
 
-- `position_deadband_m`：中心附近不因微小位置误差移动，默认5 mm。
+- `position_deadband_m`：中心附近不因微小位置误差移动，默认2 mm。现有20 cm静态
+  数据的滤波噪声约0.04 mm，因此不再使用过宽的5 mm死区。
 - `lateral_kp_per_s`：位置误差反馈。太小会跟随滞后，太大会左右振荡。
+- `lateral_ki_per_s2`：位置误差积分增益。它会保留维持目标匀速跟随所需的命令，
+  使相对速度回到0后小车仍能运动。太小会长期落后，太大会换向拖尾或振荡。
+- `max_integral_vy_mps`：积分项自身上限。控制器在总输出饱和且积分继续推向同一
+  方向时暂停积分；反向误差仍可释放积分。
 - `relative_velocity_gain`：目标运动前馈/阻尼。太小追不上0.5 m/s目标，太大会放大
   速度估计噪声。
 - `max_vy_mps`：视觉命令限速。协议硬上限是0.8 m/s，第一次上车建议改成0.1。
@@ -162,17 +176,33 @@ vy_raw = lateral_kp_per_s * deadbanded_position
 1. 目标向左时必须输出正 `vy`，向右时必须输出负 `vy`。
 2. 检查滤波误差相对原始误差的延迟。
 3. 逐步增加 `filter_beta` 改善速度估计。
-4. 再调 `relative_velocity_gain`，观察速度变化能否提前反映在 `vy` 中。
+4. 此阶段先令 `lateral_ki_per_s2=0`，调 `relative_velocity_gain`，观察速度变化能否
+   提前反映在 `vy` 中。
+5. 恢复积分后，固定相机进行的长时间偏置会让 `I` 持续增长，这是没有车辆闭环时
+   的预期结果，不应误判成检测漂移。
 
 这一步没有车辆闭环，不能据此确定最终 `kp`，只能验证符号、滤波和前馈趋势。
 
 ### 阶段C：第一次上车
 
-1. 将 `max_vy_mps=0.10`，保持较低 `lateral_kp_per_s`。
+1. 将 `max_vy_mps=0.10`、`max_integral_vy_mps=0.08`，保持较低比例和积分增益。
 2. 按电控快速开始逐方向确认，随时松开L1停车。
-3. 先把 `relative_velocity_gain=0`，只调位置反馈到不过冲。
-4. 再从0.1开始增加速度项，直到跟随滞后改善且不振荡。
-5. 最后逐步提高 `max_vy_mps`，不得一步调到0.6或0.8。
+3. 先把 `lateral_ki_per_s2=0` 和 `relative_velocity_gain=0`，只调位置比例项到不过冲。
+4. 从较小值增加积分增益，使匀速目标跟随时的中心偏差逐渐消失；若换向后拖尾，
+   先减小积分增益或积分上限。
+5. 再从0.1开始增加速度项，直到起步和换向滞后改善且不振荡。
+6. 最后逐步提高 `max_vy_mps`，不得一步调到0.6或0.8。
+
+### 判断是否真正居中
+
+只看相机固定、目标移动的日志无法验证最终闭环，因为日志中的命令没有真正改变
+相机位置。上车后应同时满足：
+
+1. 目标匀速运动时，`lateral_error_filtered_m` 的长期均值接近0，而不是靠持续偏在
+   一侧产生速度命令。
+2. 匀速阶段相对速度接近0时，`vy_integral_mps` 应保留主要跟随速度。
+3. 目标停止或反向后，积分能被反向误差释放，且中心点不持续穿越死区来回振荡。
+4. 正常稳态不应长期出现 `command_saturated=true`；否则车辆速度能力或参数不够。
 
 ### 阶段D：比赛场地
 

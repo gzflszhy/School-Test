@@ -47,6 +47,29 @@ int main() {
     assert(target_left.raw_lateral_error_m > 0.0F);
     assert(target_left.vy_mps > 0.0F);
 
+    LateralControlConfig integral_config = config;
+    integral_config.position_deadband_m = 0.0F;
+    integral_config.relative_velocity_gain = 0.0F;
+    integral_config.filter_alpha = 1.0F;
+    integral_config.filter_beta = 0.0F;
+    LateralController integral_controller(integral_config);
+    LateralControlOutput integrating;
+    for (int frame = 0; frame < 25; ++frame) {
+        integrating = integral_controller.update(markerAt(
+            210.0F, start + std::chrono::milliseconds(40 * frame)));
+    }
+    assert(integrating.vy_integral_mps > 0.0F);
+    const auto centered_after_motion = integral_controller.update(markerAt(
+        240.0F, start + std::chrono::milliseconds(1000)));
+    assert(centered_after_motion.vy_position_mps == 0.0F);
+    assert(centered_after_motion.vy_integral_mps > 0.0F);
+    assert(centered_after_motion.vy_mps > 0.0F);
+    integral_controller.reset();
+    const auto centered_after_reset = integral_controller.update(markerAt(
+        240.0F, start + std::chrono::milliseconds(1040)));
+    assert(centered_after_reset.vy_integral_mps == 0.0F);
+    assert(centered_after_reset.vy_mps == 0.0F);
+
     DetectionResult missing;
     missing.capture_timestamp = start + std::chrono::milliseconds(50);
     const auto predicted = controller.update(missing);

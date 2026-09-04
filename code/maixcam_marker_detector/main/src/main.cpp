@@ -92,6 +92,13 @@ void writeJsonl(const DetectionResult& result, const LateralControlOutput& contr
               << control.filtered_lateral_error_m
               << ",\"relative_lateral_velocity_mps\":"
               << control.relative_lateral_velocity_mps
+              << ",\"vy_position_mps\":" << control.vy_position_mps
+              << ",\"vy_integral_mps\":" << control.vy_integral_mps
+              << ",\"vy_velocity_mps\":" << control.vy_velocity_mps
+              << ",\"command_saturated\":"
+              << (control.command_saturated ? "true" : "false")
+              << ",\"acceleration_limited\":"
+              << (control.acceleration_limited ? "true" : "false")
               << ",\"geometric_center_x_px\":" << control.geometric_center_x_px
               << ",\"refined_center_x_px\":" << control.refined_center_x_px
               << ",\"optional_refinement_used\":"
@@ -224,7 +231,8 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
 
     if (display != nullptr) {
         const int baseline_y = annotated.rows - 24;
-        const int origin_x = annotated.cols / 2;
+        const int origin_x = std::clamp(cvRound(control_config.principal_x_px),
+                                        0, annotated.cols - 1);
         const int maximum_arrow_px = std::min(120, annotated.cols / 3);
         const float command_fraction = std::clamp(
             control.vy_mps / std::max(0.01F, control_config.max_vy_mps), -1.0F, 1.0F);
@@ -235,6 +243,20 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
         cv::line(annotated, cv::Point(origin_x - maximum_arrow_px, baseline_y),
                  cv::Point(origin_x + maximum_arrow_px, baseline_y),
                  cv::Scalar(96, 96, 96), 1, cv::LINE_AA);
+        cv::line(annotated, cv::Point(origin_x, 24),
+                 cv::Point(origin_x, annotated.rows - 50),
+                 cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
+        if (control.valid && control.distance_m > 0.0F) {
+            const int deadband_px = std::max(1, cvRound(
+                control_config.position_deadband_m * control_config.focal_x_px /
+                control.distance_m));
+            cv::line(annotated, cv::Point(origin_x - deadband_px, 24),
+                     cv::Point(origin_x - deadband_px, annotated.rows - 50),
+                     cv::Scalar(96, 160, 160), 1, cv::LINE_AA);
+            cv::line(annotated, cv::Point(origin_x + deadband_px, 24),
+                     cv::Point(origin_x + deadband_px, annotated.rows - 50),
+                     cv::Scalar(96, 160, 160), 1, cv::LINE_AA);
+        }
         cv::drawMarker(annotated, cv::Point(origin_x, baseline_y),
                        cv::Scalar(255, 255, 255), cv::MARKER_CROSS, 8, 1);
         if (control.valid && endpoint_x != origin_x) {
@@ -252,10 +274,19 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
         control_status << std::fixed << std::setprecision(3)
                        << "vy=" << control.vy_mps << "m/s " << direction
                        << "  x=" << control.filtered_lateral_error_m * 1000.0F
-                       << "mm  vrel=" << control.relative_lateral_velocity_mps
-                       << "m/s  z=" << control.distance_m << "m";
+                       << "mm  z=" << control.distance_m << "m";
         cv::putText(annotated, control_status.str(), cv::Point(5, baseline_y - 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.40, command_color, 1, cv::LINE_AA);
+        std::ostringstream terms;
+        terms << std::fixed << std::setprecision(3)
+              << "P=" << control.vy_position_mps
+              << " I=" << control.vy_integral_mps
+              << " V=" << control.vy_velocity_mps
+              << " vrel=" << control.relative_lateral_velocity_mps;
+        if (control.command_saturated) terms << " SAT";
+        if (control.acceleration_limited) terms << " SLEW";
+        cv::putText(annotated, terms.str(), cv::Point(5, baseline_y - 28),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.38, command_color, 1, cv::LINE_AA);
     }
 
     cv::Mat full_mask = cv::Mat::zeros(gray.size(), CV_8UC1);

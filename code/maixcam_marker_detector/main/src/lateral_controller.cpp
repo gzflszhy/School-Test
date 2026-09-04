@@ -69,8 +69,10 @@ void LateralControlConfig::normalize() {
     max_relative_velocity_mps = std::max(0.01F, max_relative_velocity_mps);
     position_deadband_m = std::max(0.0F, position_deadband_m);
     lateral_kp_per_s = std::max(0.0F, lateral_kp_per_s);
+    lateral_ki_per_s2 = std::max(0.0F, lateral_ki_per_s2);
     relative_velocity_gain = std::max(0.0F, relative_velocity_gain);
     max_vy_mps = std::clamp(max_vy_mps, 0.01F, 0.8F);
+    max_integral_vy_mps = std::clamp(max_integral_vy_mps, 0.0F, max_vy_mps);
     max_command_acceleration_mps2 = std::max(0.01F,
                                              max_command_acceleration_mps2);
     nominal_update_period_s = std::clamp(nominal_update_period_s,
@@ -97,6 +99,7 @@ void LateralController::reset() noexcept {
     initialized_ = false;
     filtered_position_m_ = 0.0F;
     filtered_velocity_mps_ = 0.0F;
+    integral_command_mps_ = 0.0F;
     last_command_mps_ = 0.0F;
     last_update_ = {};
     last_measurement_ = {};
@@ -203,11 +206,18 @@ bool LateralController::makeMeasurement(const DetectionResult& detection,
     return std::isfinite(output.raw_lateral_error_m);
 }
 
-float LateralController::limitedCommand(float requested, float dt_s) {
-    requested = std::clamp(requested, -config_.max_vy_mps, config_.max_vy_mps);
+float LateralController::limitedCommand(float requested, float dt_s,
+                                        bool& saturated,
+                                        bool& acceleration_limited) {
+    const float speed_limited =
+        std::clamp(requested, -config_.max_vy_mps, config_.max_vy_mps);
+    saturated = speed_limited != requested;
     const float maximum_change = config_.max_command_acceleration_mps2 * dt_s;
-    last_command_mps_ += std::clamp(requested - last_command_mps_,
-                                    -maximum_change, maximum_change);
+    const float requested_change = speed_limited - last_command_mps_;
+    const float limited_change = std::clamp(requested_change,
+                                            -maximum_change, maximum_change);
+    acceleration_limited = limited_change != requested_change;
+    last_command_mps_ += limited_change;
     return last_command_mps_;
 }
 
@@ -223,7 +233,10 @@ LateralControlOutput LateralController::update(const DetectionResult& detection)
     if (measurement_valid &&
         (!initialized_ || !std::isfinite(dt_s) || dt_s <= 0.0F ||
          dt_s > config_.filter_reset_gap_s)) {
-        if (initialized_) last_command_mps_ = 0.0F;
+        if (initialized_) {
+            last_command_mps_ = 0.0F;
+            integral_command_mps_ = 0.0F;
+        }
         initialized_ = true;
         filtered_position_m_ = output.raw_lateral_error_m;
         filtered_velocity_mps_ = 0.0F;
@@ -274,10 +287,38 @@ LateralControlOutput LateralController::update(const DetectionResult& detection)
             std::abs(controlled_position) - config_.position_deadband_m,
             controlled_position);
     }
-    output.unconstrained_vy_mps =
-        config_.lateral_kp_per_s * controlled_position +
+    output.vy_position_mps = config_.lateral_kp_per_s * controlled_position;
+    output.vy_velocity_mps =
         config_.relative_velocity_gain * filtered_velocity_mps_;
-    output.vy_mps = limitedCommand(output.unconstrained_vy_mps, dt_s);
+
+    // The integral term retains the chassis velocity needed to keep a moving
+    // target centered after its image-relative velocity has fallen to zero.
+    // Only real measurements update it; short prediction gaps hold the last
+    // learned value. Conditional integration prevents wind-up at the speed
+    // limit while still allowing an opposing error to unwind the integral.
+    if (output.source == LateralControlSource::MEASURED &&
+        config_.lateral_ki_per_s2 > 0.0F && controlled_position != 0.0F) {
+        const float delta =
+            config_.lateral_ki_per_s2 * controlled_position * dt_s;
+        const float candidate = std::clamp(
+            integral_command_mps_ + delta, -config_.max_integral_vy_mps,
+            config_.max_integral_vy_mps);
+        const float candidate_command =
+            output.vy_position_mps + candidate + output.vy_velocity_mps;
+        const bool pushes_positive_saturation =
+            candidate_command > config_.max_vy_mps && delta > 0.0F;
+        const bool pushes_negative_saturation =
+            candidate_command < -config_.max_vy_mps && delta < 0.0F;
+        if (!pushes_positive_saturation && !pushes_negative_saturation) {
+            integral_command_mps_ = candidate;
+        }
+    }
+    output.vy_integral_mps = integral_command_mps_;
+    output.unconstrained_vy_mps = output.vy_position_mps +
+        output.vy_integral_mps + output.vy_velocity_mps;
+    output.vy_mps = limitedCommand(output.unconstrained_vy_mps, dt_s,
+                                   output.command_saturated,
+                                   output.acceleration_limited);
     return output;
 }
 
@@ -333,6 +374,8 @@ bool loadLateralControlConfig(const std::string& path, LateralControlConfig& con
         SET_FLOAT(max_relative_velocity_mps)
         SET_FLOAT(position_deadband_m)
         SET_FLOAT(lateral_kp_per_s)
+        SET_FLOAT(lateral_ki_per_s2)
+        SET_FLOAT(max_integral_vy_mps)
         SET_FLOAT(relative_velocity_gain)
         SET_FLOAT(max_vy_mps)
         SET_FLOAT(max_command_acceleration_mps2)

@@ -41,8 +41,10 @@ struct LateralControlConfig {
 
     // vy is positive to vehicle-left. These are deliberately conservative
     // defaults for log-only validation before the first chassis test.
-    float position_deadband_m = 0.005F;
+    float position_deadband_m = 0.002F;
     float lateral_kp_per_s = 2.50F;
+    float lateral_ki_per_s2 = 1.50F;
+    float max_integral_vy_mps = 0.55F;
     float relative_velocity_gain = 0.85F;
     float max_vy_mps = 0.60F;
     float max_command_acceleration_mps2 = 2.00F;
@@ -74,8 +76,13 @@ struct LateralControlOutput {
     float raw_lateral_error_m = 0.0F;
     float filtered_lateral_error_m = 0.0F;
     float relative_lateral_velocity_mps = 0.0F;
+    float vy_position_mps = 0.0F;
+    float vy_integral_mps = 0.0F;
+    float vy_velocity_mps = 0.0F;
     float unconstrained_vy_mps = 0.0F;
     float vy_mps = 0.0F;
+    bool command_saturated = false;
+    bool acceleration_limited = false;
 };
 
 class LateralController {
@@ -89,7 +96,8 @@ public:
 private:
     bool makeMeasurement(const DetectionResult& detection,
                          LateralControlOutput& output) const;
-    float limitedCommand(float requested, float dt_s);
+    float limitedCommand(float requested, float dt_s, bool& saturated,
+                         bool& acceleration_limited);
 
     LateralControlConfig config_;
     MarkerGeometry geometry_;
@@ -97,6 +105,7 @@ private:
     bool initialized_ = false;
     float filtered_position_m_ = 0.0F;
     float filtered_velocity_mps_ = 0.0F;
+    float integral_command_mps_ = 0.0F;
     float last_command_mps_ = 0.0F;
     SteadyTimePoint last_update_{};
     SteadyTimePoint last_measurement_{};
