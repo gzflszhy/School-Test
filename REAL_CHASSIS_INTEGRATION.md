@@ -7,13 +7,13 @@
 
 | MaixCAM-Pro | DJI C板 | 说明 |
 |---|---|---|
-| A19 / UART1_TX | PG9 / USART6_RX | MaixCAM向C板单向发送 |
+| A16 / UART1_TX | PG9 / USART6_RX | MaixCAM向C板单向发送 |
 | GND | GND | 必须共地 |
 
 - 使用3.3 V TTL、115200、8N1、无流控。
 - 不要接5 V串口，也不要接RS-232电平。
 - 推荐 `/dev/ttyS1`，不要使用输出启动日志且被系统占用的UART0。
-- 程序启用 `/dev/ttyS1` 时会先执行 `A19 -> UART1_TX` 引脚复用，再打开UART并发送
+- 程序启用 `/dev/ttyS1` 时会先执行 `A16 -> UART1_TX` 引脚复用，再打开UART并发送
   第一帧停车命令；设置失败会报错退出。
 - V1不需要连接 MaixCAM RX 和 C板 PG14。
 
@@ -25,9 +25,9 @@ ls -l /dev/ttyS1
 
 若设备不存在，不要改程序路径硬试，先检查系统版本和引脚复用。
 
-`pinmux` 是芯片的“引脚功能选择器”。A19是封装上的物理引脚，同一个引脚可以作为
+`pinmux` 是芯片的“引脚功能选择器”。A16是封装上的物理引脚，同一个引脚可以作为
 GPIO、PWM7、JTAG、UART1_RTS或UART1_TX，但同一时刻只能选择其中一种。设置成
-`UART1_TX` 后，UART1控制器写入 `/dev/ttyS1` 的电平才会真正从A19输出。它不负责
+`UART1_TX` 后，UART1控制器写入 `/dev/ttyS1` 的电平才会真正从A16输出。它不负责
 波特率、8N1或AVC1数据内容，这些仍由UART对象和协议代码配置。
 
 ## 2. 程序的安全行为

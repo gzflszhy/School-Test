@@ -3,8 +3,8 @@
 import struct
 from maix import err, pinmap, time, uart
 
-# 关键：先把 MaixCam Pro 排针 A19 复用为 UART1_TX。
-err.check_raise(pinmap.set_pin_function("A19", "UART1_TX"), "set TX pin failed")
+# 关键：先把 MaixCam Pro 排针 A16 复用为 UART1_TX。
+err.check_raise(pinmap.set_pin_function("A16", "UART1_TX"), "set TX pin failed")
 
 print(uart.list_devices())  # 应包含 /dev/ttyS1
 

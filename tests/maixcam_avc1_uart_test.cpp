@@ -30,9 +30,9 @@ std::uint32_t avc1_checksum(const std::uint8_t* d, std::size_t n) {
 }  // namespace
 
 int main() {
-    if (maix::peripheral::pinmap::set_pin_function("A19", "UART1_TX")
+    if (maix::peripheral::pinmap::set_pin_function("A16", "UART1_TX")
             != maix::err::ERR_NONE) {
-        std::printf("pinmap A19->UART1_TX FAILED\n");
+        std::printf("pinmap A16->UART1_TX FAILED\n");
         return 1;
     }
 

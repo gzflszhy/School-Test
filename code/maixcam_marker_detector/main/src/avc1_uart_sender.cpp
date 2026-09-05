@@ -28,14 +28,14 @@ Avc1UartSender::Avc1UartSender(const std::string& port)
     : port_(port) {
     if (port_ == "/dev/ttyS1") {
         const maix::err::Err result =
-            maix::peripheral::pinmap::set_pin_function("A19", "UART1_TX");
+            maix::peripheral::pinmap::set_pin_function("A16", "UART1_TX");
         if (result != maix::err::ERR_NONE) {
             throw std::runtime_error(
-                "cannot set A19 pinmux to UART1_TX for /dev/ttyS1");
+                "cannot set A16 pinmux to UART1_TX for /dev/ttyS1");
         }
     }
     // Configure the physical output pin before opening the UART controller so
-    // the first AVC1 stop frame is observable on A19.
+    // the first AVC1 stop frame is observable on A16.
     impl_ = std::make_unique<Impl>(port_);
     const Avc1TransmitResult stopped = transmit(0.0F, 0.0F, false);
     if (!stopped.success) {

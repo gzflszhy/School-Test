@@ -22,7 +22,7 @@ uart_test/
 - Baud: `115200`
 - Format: `8N1`
 - Flow control: none
-- TX: `A19 -> UART1_TX`
+- TX: `A16 -> UART1_TX`
 - RX: `A18 -> UART1_RX`
 
 ## send
@@ -56,7 +56,7 @@ maixcdk build
 运行编译得到的程序后，正常输出类似：
 
 ```text
-AVC1 SEND: A19 UART1_TX, /dev/ttyS1, 115200 8N1, 20 Hz
+AVC1 SEND: A16 UART1_TX, /dev/ttyS1, 115200 8N1, 20 Hz
 sent seq=0 vx=0.00 vy=0.00 valid=1 (24 bytes)
 ```
 
@@ -89,7 +89,7 @@ checksum 错误时会打印 `BAD checksum`。
 测试 `send`：
 
 ```text
-MaixCAM A19 (TX) -> USB-TTL RX
+MaixCAM A16 (TX) -> USB-TTL RX
 MaixCAM GND      -> USB-TTL GND
 ```
 
