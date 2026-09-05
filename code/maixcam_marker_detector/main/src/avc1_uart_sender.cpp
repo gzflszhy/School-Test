@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "maix_pinmap.hpp"
 #include "maix_uart.hpp"
 
 #include "avc1_protocol.hpp"
@@ -24,7 +25,18 @@ public:
 };
 
 Avc1UartSender::Avc1UartSender(const std::string& port)
-    : impl_(std::make_unique<Impl>(port)), port_(port) {
+    : port_(port) {
+    if (port_ == "/dev/ttyS1") {
+        const maix::err::Err result =
+            maix::peripheral::pinmap::set_pin_function("A19", "UART1_TX");
+        if (result != maix::err::ERR_NONE) {
+            throw std::runtime_error(
+                "cannot set A19 pinmux to UART1_TX for /dev/ttyS1");
+        }
+    }
+    // Configure the physical output pin before opening the UART controller so
+    // the first AVC1 stop frame is observable on A19.
+    impl_ = std::make_unique<Impl>(port_);
     const Avc1TransmitResult stopped = transmit(0.0F, 0.0F, false);
     if (!stopped.success) {
         throw std::runtime_error("cannot send initial AVC1 stop frame on " + port_ +
