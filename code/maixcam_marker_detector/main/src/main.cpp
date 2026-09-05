@@ -78,7 +78,7 @@ RuntimeOptions parseOptions(int argc, char** argv) {
                          "  --display        alias for --debug-display\n"
                          "  --detector-config load exposure/bright extraction overrides\n"
                          "  --control-config load lateral tracking key=value overrides\n"
-                         "  --chassis-uart   enable AVC1 output on this UART (e.g. /dev/ttyS1)\n"
+                         "  --chassis-uart   enable AVC1 output on this UART (e.g. /dev/ttyS0)\n"
                          "  --chassis-vy-limit independent transmit limit, default 0.10 m/s\n";
             std::exit(0);
         } else {

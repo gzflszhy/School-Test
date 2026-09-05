@@ -1,6 +1,0 @@
-id: maixcam_avc1_uart_send
-name: MaixCAM AVC1 UART Send
-version: 1.0.0
-author: School-Test
-icon: ''
-desc: Standalone UART1 AVC1 frame sender test for MaixCAM Pro

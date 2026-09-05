@@ -1,5 +1,5 @@
 // Standalone MaixCAM Pro UART1 AVC1 sender test.
-// TX: A16 (UART1_TX), device: /dev/ttyS1, 115200 8N1, 20 Hz.
+// TX: A16 (UART1_TX), device: /dev/ttyS0, 115200 8N1, 20 Hz.
 
 #include "maix_uart.hpp"
 #include "maix_pinmap.hpp"
@@ -40,7 +40,7 @@ int main() {
     }
 
     maix::peripheral::uart::UART uart(
-        "/dev/ttyS1", 115200,
+        "/dev/ttyS0", 115200,
         maix::peripheral::uart::BITS_8,
         maix::peripheral::uart::PARITY_NONE,
         maix::peripheral::uart::STOP_1,
@@ -50,7 +50,7 @@ int main() {
     std::uint32_t seq = 0;
     const std::uint64_t t0 = maix::time::ticks_ms() / 1000U;
 
-    std::printf("AVC1 SEND: A16 UART1_TX, /dev/ttyS1, 115200 8N1, 20 Hz\n");
+    std::printf("AVC1 SEND: A16 UART1_TX, /dev/ttyS0, 115200 8N1, 20 Hz\n");
 
     while (true) {
         const std::uint64_t phase = (maix::time::ticks_ms() / 1000U - t0) % 15U;

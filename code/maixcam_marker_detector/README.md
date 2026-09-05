@@ -107,7 +107,7 @@ ldd ./maixcam_marker_detector
 ## AVC1 实车输出
 
 MaixCAM-Pro 使用 UART1：`A16/UART1_TX` 接 C 板 `PG9/USART6_RX`，两板 GND
-共地，均为3.3 V TTL。不要使用5 V或RS-232电平。设备节点通常为 `/dev/ttyS1`。
+共地，均为3.3 V TTL。不要使用5 V或RS-232电平。设备节点通常为 `/dev/ttyS0`。
 程序打开该设备节点前会自动把A16的pinmux设置为`UART1_TX`；无需再运行MaixPy脚本
 手动改引脚复用。
 
@@ -115,7 +115,7 @@ MaixCAM-Pro 使用 UART1：`A16/UART1_TX` 接 C 板 `PG9/USART6_RX`，两板 GND
 
 ```bash
 ./maixcam_marker_detector --control-config lateral_control.conf \
-  --chassis-uart /dev/ttyS1 --chassis-vy-limit 0.10
+  --chassis-uart /dev/ttyS0 --chassis-vy-limit 0.10
 ```
 
 程序固定发送 `vx=0`，只控制横移。每个视觉周期发送一帧24字节 AVC1 命令；发送序号
