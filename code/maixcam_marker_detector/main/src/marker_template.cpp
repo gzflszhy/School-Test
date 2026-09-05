@@ -121,10 +121,11 @@ TemplateScore MarkerTemplate::score(const cv::Mat& canonical_gray,
     const cv::Scalar background_mean = cv::mean(canonical_gray, background_mask_);
     const int contrast_threshold = cvRound(background_mean[0] +
                                            config_.local_contrast_threshold);
-    const int threshold = std::clamp(std::max({static_cast<int>(otsu), high,
-                                                contrast_threshold}),
-                                     config_.min_led_threshold,
-                                     config_.max_led_threshold);
+    const int threshold = config_.use_fixed_led_threshold
+        ? config_.fixed_led_threshold
+        : std::clamp(std::max({static_cast<int>(otsu), high,
+                               contrast_threshold}),
+                     config_.min_led_threshold, config_.max_led_threshold);
     cv::threshold(canonical_gray, scratch_binary, threshold, 255, cv::THRESH_BINARY);
 
     float large_coverage = 0.0F;

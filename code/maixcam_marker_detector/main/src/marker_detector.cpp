@@ -61,19 +61,72 @@ cv::Matx23f asMatx23f(const cv::Mat& matrix) {
             converted.at<float>(1, 0), converted.at<float>(1, 1), converted.at<float>(1, 2)};
 }
 
-int percentile8u(const cv::Mat& image, float fraction) {
-    std::array<int, 256> histogram{};
+struct GrayStatistics {
+    std::array<std::uint32_t, 256> histogram{};
+    std::uint64_t sum = 0;
+    std::uint64_t squared_sum = 0;
+    std::uint32_t count = 0;
+    int minimum = 0;
+    int maximum = 0;
+    float mean = 0.0F;
+    float stddev = 0.0F;
+
+    int percentile(float fraction) const {
+        const std::uint32_t target = std::max<std::uint32_t>(
+            1U, static_cast<std::uint32_t>(
+                    std::ceil(fraction * static_cast<float>(count))));
+        std::uint32_t cumulative = 0;
+        for (int value = 0; value < 256; ++value) {
+            cumulative += histogram[static_cast<std::size_t>(value)];
+            if (cumulative >= target) return value;
+        }
+        return 255;
+    }
+
+    float fractionAtOrAbove(int threshold) const {
+        if (count == 0U) return 0.0F;
+        std::uint32_t selected = 0;
+        for (int value = std::clamp(threshold, 0, 255); value < 256; ++value) {
+            selected += histogram[static_cast<std::size_t>(value)];
+        }
+        return static_cast<float>(selected) / static_cast<float>(count);
+    }
+};
+
+GrayStatistics grayStatistics(const cv::Mat& image, bool calculate_stddev) {
+    GrayStatistics result;
     for (int y = 0; y < image.rows; ++y) {
         const auto* row = image.ptr<std::uint8_t>(y);
-        for (int x = 0; x < image.cols; ++x) ++histogram[row[x]];
+        for (int x = 0; x < image.cols; ++x) {
+            const std::uint32_t value = row[x];
+            ++result.histogram[value];
+            result.sum += value;
+            if (calculate_stddev) result.squared_sum += value * value;
+            ++result.count;
+        }
     }
-    const int target = static_cast<int>(fraction * static_cast<float>(image.total()));
-    int cumulative = 0;
+    if (result.count == 0U) return result;
     for (int value = 0; value < 256; ++value) {
-        cumulative += histogram[static_cast<std::size_t>(value)];
-        if (cumulative >= target) return value;
+        if (result.histogram[static_cast<std::size_t>(value)] != 0U) {
+            result.minimum = value;
+            break;
+        }
     }
-    return 255;
+    for (int value = 255; value >= 0; --value) {
+        if (result.histogram[static_cast<std::size_t>(value)] != 0U) {
+            result.maximum = value;
+            break;
+        }
+    }
+    result.mean = static_cast<float>(result.sum) /
+                  static_cast<float>(result.count);
+    if (calculate_stddev) {
+        const double mean = static_cast<double>(result.mean);
+        const double variance = static_cast<double>(result.squared_sum) /
+                                static_cast<double>(result.count) - mean * mean;
+        result.stddev = static_cast<float>(std::sqrt(std::max(0.0, variance)));
+    }
+    return result;
 }
 
 MarkerOrientation quantizeOrientation(const cv::Point2f& x_axis) {
@@ -151,17 +204,47 @@ cv::Rect MarkerDetector::trackingSearchRoi(SteadyTimePoint capture_timestamp) co
 
 int MarkerDetector::makeLedMask(const cv::Rect& roi) {
     const cv::Mat source = gray_(roi);
+    // Squared sums are diagnostics-only; the competition path retains the
+    // previous histogram/mean cost without an extra 64-bit multiply per pixel.
+    const GrayStatistics statistics = grayStatistics(source, debug_enabled_);
     const double otsu = cv::threshold(source, roi_binary_, 0, 255,
                                       cv::THRESH_BINARY | cv::THRESH_OTSU);
-    const int high = std::max(0, percentile8u(source, config_.bright_percentile) - 1);
-    const int mean_based = cvRound(cv::mean(source)[0] + config_.local_contrast_threshold);
-    const int threshold = std::clamp(std::max({static_cast<int>(otsu), high, mean_based}),
-                                     config_.min_led_threshold, config_.max_led_threshold);
+    const int high = std::max(
+        0, statistics.percentile(config_.bright_percentile) - 1);
+    const int mean_based = cvRound(
+        statistics.mean + static_cast<float>(config_.local_contrast_threshold));
+    const int adaptive_unclamped = std::max(
+        {static_cast<int>(otsu), high, mean_based});
+    const int threshold = config_.use_fixed_led_threshold
+        ? config_.fixed_led_threshold
+        : std::clamp(adaptive_unclamped, config_.min_led_threshold,
+                     config_.max_led_threshold);
     cv::threshold(source, roi_binary_, threshold, 255, cv::THRESH_BINARY);
     if (config_.morphology_kernel > 1) {
         // A single close heals narrow rolling-shutter/PWM dark stripes without
         // the expansion caused by a large-kernel pipeline.
         cv::morphologyEx(roi_binary_, roi_binary_, cv::MORPH_CLOSE, morphology_kernel_);
+    }
+    if (debug_enabled_) {
+        debug_snapshot_.diagnostics_valid = true;
+        debug_snapshot_.fixed_threshold = config_.use_fixed_led_threshold;
+        debug_snapshot_.led_threshold = threshold;
+        debug_snapshot_.adaptive_unclamped_threshold = adaptive_unclamped;
+        debug_snapshot_.otsu_threshold = static_cast<int>(otsu);
+        debug_snapshot_.percentile_threshold = high;
+        debug_snapshot_.mean_based_threshold = mean_based;
+        debug_snapshot_.gray_min = statistics.minimum;
+        debug_snapshot_.gray_max = statistics.maximum;
+        debug_snapshot_.gray_p50 = statistics.percentile(0.50F);
+        debug_snapshot_.gray_p90 = statistics.percentile(0.90F);
+        debug_snapshot_.gray_p95 = statistics.percentile(0.95F);
+        debug_snapshot_.gray_p99 = statistics.percentile(0.99F);
+        debug_snapshot_.gray_mean = statistics.mean;
+        debug_snapshot_.gray_stddev = statistics.stddev;
+        debug_snapshot_.bright_fraction = static_cast<float>(
+            cv::countNonZero(roi_binary_)) / static_cast<float>(source.total());
+        debug_snapshot_.roi_saturation_fraction =
+            statistics.fractionAtOrAbove(config_.saturation_threshold);
     }
     return threshold;
 }
@@ -682,7 +765,23 @@ DetectionResult MarkerDetector::process(const cv::Mat& frame,
     const SteadyTimePoint processing_start = std::chrono::steady_clock::now();
     if (debug_enabled_) {
         debug_snapshot_.search_roi = {};
+        debug_snapshot_.diagnostics_valid = false;
+        debug_snapshot_.fixed_threshold = false;
         debug_snapshot_.led_threshold = 0;
+        debug_snapshot_.adaptive_unclamped_threshold = 0;
+        debug_snapshot_.otsu_threshold = 0;
+        debug_snapshot_.percentile_threshold = 0;
+        debug_snapshot_.mean_based_threshold = 0;
+        debug_snapshot_.gray_min = 0;
+        debug_snapshot_.gray_max = 0;
+        debug_snapshot_.gray_p50 = 0;
+        debug_snapshot_.gray_p90 = 0;
+        debug_snapshot_.gray_p95 = 0;
+        debug_snapshot_.gray_p99 = 0;
+        debug_snapshot_.gray_mean = 0.0F;
+        debug_snapshot_.gray_stddev = 0.0F;
+        debug_snapshot_.bright_fraction = 0.0F;
+        debug_snapshot_.roi_saturation_fraction = 0.0F;
         debug_snapshot_.raw_contour_count = 0;
         debug_snapshot_.led_mask.release();
         debug_snapshot_.candidates.clear();

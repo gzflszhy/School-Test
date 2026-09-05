@@ -144,4 +144,18 @@ const std::string& MaixCameraSource::last_error() const noexcept {
     return last_error_;
 }
 
+CameraTelemetry MaixCameraSource::telemetry() const noexcept {
+    CameraTelemetry result;
+    result.auto_exposure = config_.use_auto_exposure;
+    if (!impl_ || !impl_->camera || !impl_->camera->is_opened()) return result;
+    try {
+        result.exposure_us = impl_->camera->exposure();
+        result.gain = impl_->camera->gain();
+        result.available = result.exposure_us >= 0 && result.gain >= 0;
+    } catch (...) {
+        result.available = false;
+    }
+    return result;
+}
+
 }  // namespace maixcam_marker

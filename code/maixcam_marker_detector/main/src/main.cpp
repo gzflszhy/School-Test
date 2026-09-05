@@ -32,6 +32,7 @@ using namespace maixcam_marker;
 struct RuntimeOptions {
     bool debug = false;
     bool debug_display = false;
+    std::string detector_config_path;
     std::string control_config_path;
     std::string chassis_uart_path;
     float chassis_vy_limit_mps = 0.10F;
@@ -43,9 +44,12 @@ RuntimeOptions parseOptions(int argc, char** argv) {
         const std::string_view argument(argv[i]);
         if (argument == "--debug") {
             options.debug = true;
-        } else if (argument == "--debug-display") {
+        } else if (argument == "--debug-display" || argument == "--display") {
             options.debug = true;
             options.debug_display = true;
+        } else if (argument == "--detector-config") {
+            if (++i >= argc) throw std::runtime_error("--detector-config requires a path");
+            options.detector_config_path = argv[i];
         } else if (argument == "--control-config") {
             if (++i >= argc) throw std::runtime_error("--control-config requires a path");
             options.control_config_path = argv[i];
@@ -66,11 +70,13 @@ RuntimeOptions parseOptions(int argc, char** argv) {
                     "--chassis-vy-limit must be in (0, 0.8]");
             }
         } else if (argument == "--help") {
-            std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display] "
-                         "[--control-config PATH] [--chassis-uart PATH] "
+            std::cout << "Usage: maixcam_marker_detector [--debug|--debug-display|--display] "
+                         "[--detector-config PATH] [--control-config PATH] [--chassis-uart PATH] "
                          "[--chassis-vy-limit MPS]\n"
                          "  --debug          stream annotated frames to MaixVision\n"
                          "  --debug-display  show on the device display and MaixVision\n"
+                         "  --display        alias for --debug-display\n"
+                         "  --detector-config load exposure/bright extraction overrides\n"
                          "  --control-config load lateral tracking key=value overrides\n"
                          "  --chassis-uart   enable AVC1 output on this UART (e.g. /dev/ttyS1)\n"
                          "  --chassis-vy-limit independent transmit limit, default 0.10 m/s\n";
@@ -90,6 +96,9 @@ std::int64_t steadyMicros(SteadyTimePoint timestamp) {
 
 void writeJsonl(const DetectionResult& result, const LateralControlOutput& control,
                 const Avc1TransmitResult& chassis_tx,
+                const DetectorDebugSnapshot& debug,
+                const DetectorConfig& detector_config,
+                const CameraTelemetry& camera_telemetry,
                 std::uint64_t frame_sequence) {
     // Values are written directly because every string enum is produced by a
     // closed local enum-to-string conversion; no untrusted string is encoded.
@@ -136,6 +145,53 @@ void writeJsonl(const DetectionResult& result, const LateralControlOutput& contr
               << (chassis_tx.valid ? "true" : "false")
               << ",\"chassis_tx_vx_mps\":" << chassis_tx.vx_mps
               << ",\"chassis_tx_vy_mps\":" << chassis_tx.vy_mps
+              << ",\"image_diagnostics_valid\":"
+              << (debug.diagnostics_valid ? "true" : "false")
+              << ",\"threshold_mode\":\""
+              << (debug.fixed_threshold ? "FIXED" : "ADAPTIVE")
+              << "\",\"led_threshold\":" << debug.led_threshold
+              << ",\"adaptive_unclamped_threshold\":"
+              << debug.adaptive_unclamped_threshold
+              << ",\"otsu_threshold\":" << debug.otsu_threshold
+              << ",\"percentile_threshold\":" << debug.percentile_threshold
+              << ",\"mean_based_threshold\":" << debug.mean_based_threshold
+              << ",\"configured_bright_percentile\":"
+              << detector_config.bright_percentile
+              << ",\"configured_min_led_threshold\":"
+              << detector_config.min_led_threshold
+              << ",\"configured_max_led_threshold\":"
+              << detector_config.max_led_threshold
+              << ",\"configured_local_contrast_threshold\":"
+              << detector_config.local_contrast_threshold
+              << ",\"configured_saturation_threshold\":"
+              << detector_config.saturation_threshold
+              << ",\"configured_morphology_kernel\":"
+              << detector_config.morphology_kernel
+              << ",\"configured_fixed_led_threshold\":"
+              << detector_config.fixed_led_threshold
+              << ",\"roi_x\":" << debug.search_roi.x
+              << ",\"roi_y\":" << debug.search_roi.y
+              << ",\"roi_w\":" << debug.search_roi.width
+              << ",\"roi_h\":" << debug.search_roi.height
+              << ",\"roi_gray_min\":" << debug.gray_min
+              << ",\"roi_gray_max\":" << debug.gray_max
+              << ",\"roi_gray_mean\":" << debug.gray_mean
+              << ",\"roi_gray_stddev\":" << debug.gray_stddev
+              << ",\"roi_gray_p50\":" << debug.gray_p50
+              << ",\"roi_gray_p90\":" << debug.gray_p90
+              << ",\"roi_gray_p95\":" << debug.gray_p95
+              << ",\"roi_gray_p99\":" << debug.gray_p99
+              << ",\"roi_bright_fraction\":" << debug.bright_fraction
+              << ",\"roi_saturation_fraction\":"
+              << debug.roi_saturation_fraction
+              << ",\"raw_contour_count\":" << debug.raw_contour_count
+              << ",\"led_candidate_count\":" << debug.candidates.size()
+              << ",\"camera_telemetry_available\":"
+              << (camera_telemetry.available ? "true" : "false")
+              << ",\"camera_auto_exposure\":"
+              << (camera_telemetry.auto_exposure ? "true" : "false")
+              << ",\"camera_exposure_us\":" << camera_telemetry.exposure_us
+              << ",\"camera_gain\":" << camera_telemetry.gain
               << ",\"geometric_center_x_px\":" << control.geometric_center_x_px
               << ",\"refined_center_x_px\":" << control.refined_center_x_px
               << ",\"optional_refinement_used\":"
@@ -177,6 +233,8 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
                     const LateralControlOutput& control,
                     const LateralControlConfig& control_config,
                     const DetectorDebugSnapshot& debug,
+                    const DetectorConfig& detector_config,
+                    const CameraTelemetry& camera_telemetry,
                     maix::display::Display* display) {
     cv::Mat annotated;
     cv::cvtColor(gray, annotated, cv::COLOR_GRAY2RGB);
@@ -342,6 +400,39 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
     cv::putText(mask_rgb, "LED threshold mask", cv::Point(5, 17),
                 cv::FONT_HERSHEY_SIMPLEX, 0.43, cv::Scalar(255, 255, 0), 1,
                 cv::LINE_AA);
+    if (debug.diagnostics_valid) {
+        std::ostringstream threshold_status;
+        threshold_status << (debug.fixed_threshold ? "FIX" : "AUTO")
+                         << " T=" << debug.led_threshold
+                         << " raw=" << debug.adaptive_unclamped_threshold
+                         << " O=" << debug.otsu_threshold
+                         << " P" << std::fixed << std::setprecision(3)
+                         << detector_config.bright_percentile << "="
+                         << debug.percentile_threshold
+                         << " M=" << debug.mean_based_threshold;
+        cv::putText(mask_rgb, threshold_status.str(), cv::Point(5, 36),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1,
+                    cv::LINE_AA);
+        std::ostringstream gray_status;
+        gray_status << std::fixed << std::setprecision(1)
+                    << "gray " << debug.gray_mean << "+/-" << debug.gray_stddev
+                    << " p50=" << debug.gray_p50
+                    << " p95=" << debug.gray_p95
+                    << " p99=" << debug.gray_p99;
+        cv::putText(mask_rgb, gray_status.str(), cv::Point(5, 55),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1,
+                    cv::LINE_AA);
+        std::ostringstream camera_status;
+        camera_status << "AE=" << (camera_telemetry.auto_exposure ? 1 : 0)
+                      << " exp=" << camera_telemetry.exposure_us
+                      << "us gain=" << camera_telemetry.gain
+                      << std::fixed << std::setprecision(3)
+                      << " bright=" << debug.bright_fraction
+                      << " sat=" << debug.roi_saturation_fraction;
+        cv::putText(mask_rgb, camera_status.str(), cv::Point(5, 74),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.40, cv::Scalar(255, 255, 255), 1,
+                    cv::LINE_AA);
+    }
 
     cv::Mat canvas;
     cv::hconcat(annotated, mask_rgb, canvas);
@@ -357,7 +448,14 @@ void showDebugFrame(const cv::Mat& gray, const DetectionResult& result,
 
 int run(const RuntimeOptions& options) {
     DetectorConfig detector_config;
-    detector_config.normalize();
+    if (!options.detector_config_path.empty()) {
+        std::string error;
+        if (!loadDetectorConfig(options.detector_config_path, detector_config, error)) {
+            throw std::runtime_error(error);
+        }
+    } else {
+        detector_config.normalize();
+    }
     LateralControlConfig control_config;
     if (!options.control_config_path.empty()) {
         std::string error;
@@ -426,6 +524,9 @@ int run(const RuntimeOptions& options) {
         // complete before the next read replaces (and releases) that image.
         const DetectionResult result = detector.process(frame.gray(), frame.capture_time());
         const LateralControlOutput control = lateral_controller.update(result);
+        CameraTelemetry camera_telemetry;
+        camera_telemetry.auto_exposure = camera_config.use_auto_exposure;
+        if (options.debug) camera_telemetry = camera.telemetry();
         Avc1TransmitResult chassis_tx;
         if (chassis_sender) {
             const float transmitted_vy = control.valid
@@ -441,9 +542,11 @@ int run(const RuntimeOptions& options) {
         }
         if (options.debug) {
             showDebugFrame(frame.gray(), result, control, lateral_controller.config(),
-                           detector.debugSnapshot(), display.get());
+                           detector.debugSnapshot(), detector_config,
+                           camera_telemetry, display.get());
         }
-        writeJsonl(result, control, chassis_tx, frame.sequence());
+        writeJsonl(result, control, chassis_tx, detector.debugSnapshot(),
+                   detector_config, camera_telemetry, frame.sequence());
     }
 
     std::cerr << detector.benchmark().summary() << '\n';

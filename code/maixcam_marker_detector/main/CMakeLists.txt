@@ -7,6 +7,7 @@ list(APPEND ADD_SRCS
     "src/main.cpp"
     "src/avc1_protocol.cpp"
     "src/avc1_uart_sender.cpp"
+    "src/detector_config.cpp"
     "src/maix_camera_source.cpp"
     "src/marker_geometry.cpp"
     "src/marker_template.cpp"

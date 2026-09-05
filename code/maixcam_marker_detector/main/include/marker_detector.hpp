@@ -16,7 +16,23 @@ namespace maixcam_marker {
 
 struct DetectorDebugSnapshot {
     cv::Rect search_roi{};
+    bool diagnostics_valid = false;
+    bool fixed_threshold = false;
     int led_threshold = 0;
+    int adaptive_unclamped_threshold = 0;
+    int otsu_threshold = 0;
+    int percentile_threshold = 0;
+    int mean_based_threshold = 0;
+    int gray_min = 0;
+    int gray_max = 0;
+    int gray_p50 = 0;
+    int gray_p90 = 0;
+    int gray_p95 = 0;
+    int gray_p99 = 0;
+    float gray_mean = 0.0F;
+    float gray_stddev = 0.0F;
+    float bright_fraction = 0.0F;
+    float roi_saturation_fraction = 0.0F;
     int raw_contour_count = 0;
     cv::Mat led_mask;
     std::vector<cv::RotatedRect> candidates;

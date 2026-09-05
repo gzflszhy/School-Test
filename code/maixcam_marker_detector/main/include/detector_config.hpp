@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace maixcam_marker {
 
@@ -33,6 +34,8 @@ struct DetectorConfig {
     // LED segmentation. The final threshold is derived from Otsu, a high
     // percentile and the local mean, then clamped to this interval.
     float bright_percentile = 0.92F;
+    bool use_fixed_led_threshold = false;
+    int fixed_led_threshold = 180;
     int min_led_threshold = 105;
     int max_led_threshold = 250;
     int local_contrast_threshold = 24;
@@ -132,6 +135,7 @@ struct DetectorConfig {
         return_to_search_lost_frames = std::max(expand_after_lost_frames,
                                                 return_to_search_lost_frames);
         bright_percentile = std::clamp(bright_percentile, 0.50F, 0.999F);
+        fixed_led_threshold = std::clamp(fixed_led_threshold, 0, 255);
         min_led_threshold = std::clamp(min_led_threshold, 0, 255);
         max_led_threshold = std::clamp(max_led_threshold, min_led_threshold, 255);
         saturation_threshold = std::clamp(saturation_threshold, 0, 255);
@@ -157,5 +161,10 @@ struct DetectorConfig {
         previous_velocity_weight = std::clamp(previous_velocity_weight, 0.0F, 1.0F);
     }
 };
+
+// Runtime field-tuning overrides: one `key=value` per line, '#' comments.
+// Only camera/exposure and bright-region extraction parameters are accepted.
+bool loadDetectorConfig(const std::string& path, DetectorConfig& config,
+                        std::string& error);
 
 }  // namespace maixcam_marker

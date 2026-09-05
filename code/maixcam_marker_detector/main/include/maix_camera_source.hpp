@@ -27,6 +27,13 @@ struct CameraConfig {
     bool prefer_latest_frame = true;
 };
 
+struct CameraTelemetry {
+    bool available = false;
+    bool auto_exposure = true;
+    int exposure_us = -1;
+    int gain = -1;
+};
+
 /**
  * A move-only view of a MaixCDK image.  pixels remains valid until this object
  * is destroyed or moved-from; callers must finish cv::Mat processing first.
@@ -75,6 +82,8 @@ public:
 
     [[nodiscard]] const CameraConfig& config() const noexcept;
     [[nodiscard]] const std::string& last_error() const noexcept;
+    /** Read ISP values for field diagnostics. Call only in debug modes. */
+    [[nodiscard]] CameraTelemetry telemetry() const noexcept;
 
 private:
     class Impl;

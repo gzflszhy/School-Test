@@ -77,6 +77,7 @@ ssh root@DEVICE_IP "mkdir -p /root/maixcam_marker_test/dl_lib"
 scp build/maixcam_marker_detector root@DEVICE_IP:/root/maixcam_marker_test/
 scp -r build/dl_lib/. root@DEVICE_IP:/root/maixcam_marker_test/dl_lib/
 scp lateral_control.conf root@DEVICE_IP:/root/maixcam_marker_test/
+scp detector_tuning.conf root@DEVICE_IP:/root/maixcam_marker_test/
 ```
 
 在 MaixCAM-Pro 上运行：
@@ -142,8 +143,17 @@ MaixCAM-Pro 推荐使用 UART1：`A19/UART1_TX` 接 C 板 `PG9/USART6_RX`，两�
 需要同时在设备屏幕上显示时运行：
 
 ```bash
-./maixcam_marker_detector --debug-display
+./maixcam_marker_detector --detector-config detector_tuning.conf --debug-display
 ```
+
+`--display` 是 `--debug-display` 的简写。右侧二值图现在同时显示最终阈值、未限幅
+自适应阈值、Otsu候选、高分位候选、均值对比度候选、ROI灰度分布、亮区/饱和比例，
+以及当前曝光时间和增益。相同字段也逐帧写入JSONL，完整采集方法见仓库根目录
+`FIELD_LIGHTING_TUNING.md`。
+
+现场日志分析完成后，可以在 `detector_tuning.conf` 中把
+`use_auto_exposure=0`、`use_fixed_led_threshold=1`，并填入确定的 `exposure_us` 和
+`fixed_led_threshold`，无需重新编译。
 
 只有 `--debug-display` 会额外绘制 L 中心：所有通过大 L 初筛的候选中心是紫色小点；最终参与成功判定的三个中心用红圈标出，并以绿色线段连接。首次捕获时按画面从上到下编号为 `L0`、`L1`、`L2`，跟踪期间以相对上一帧总位移最小的方式保持编号，连续丢失并重新搜索后才重新编号。
 
