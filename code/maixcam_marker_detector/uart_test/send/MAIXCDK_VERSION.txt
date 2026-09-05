@@ -1,0 +1,2 @@
+Firmware baseline: maixcam-pro-2025-03-19-maixpy-v4.10.3
+MaixCDK commit: 0beaac9d3dd06248bad5259935f5110e261dd447
