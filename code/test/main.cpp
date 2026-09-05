@@ -36,9 +36,9 @@ std::uint32_t avc1_checksum(const std::uint8_t* d, std::size_t n)
 int main()
 {
     if (maix::peripheral::pinmap::set_pin_function(
-            "A16", "UART1_TX") != maix::err::ERR_NONE)
+            "A16", "UART0_TX") != maix::err::ERR_NONE)
     {
-        printf("pinmap A16->UART1_TX FAILED\n");
+        printf("pinmap A16->UART0_TX FAILED\n");
         return 1;
     }
 

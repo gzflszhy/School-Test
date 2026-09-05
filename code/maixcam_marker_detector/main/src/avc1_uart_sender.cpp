@@ -28,10 +28,10 @@ Avc1UartSender::Avc1UartSender(const std::string& port)
     : port_(port) {
     if (port_ == "/dev/ttyS0") {
         const maix::err::Err result =
-            maix::peripheral::pinmap::set_pin_function("A16", "UART1_TX");
+            maix::peripheral::pinmap::set_pin_function("A16", "UART0_TX");
         if (result != maix::err::ERR_NONE) {
             throw std::runtime_error(
-                "cannot set A16 pinmux to UART1_TX for /dev/ttyS0");
+                "cannot set A16 pinmux to UART0_TX for /dev/ttyS0");
         }
     }
     // Configure the physical output pin before opening the UART controller so

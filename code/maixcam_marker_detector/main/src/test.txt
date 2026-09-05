@@ -1,0 +1,7 @@
+./maixcam_marker_detector \
+  --detector-config detector_tuning.conf \
+  --control-config lateral_control.conf \
+  --chassis-uart /dev/ttyS0 \
+  --chassis-vy-limit 0.5 \
+  --debug-display \
+  2>&1 | tee detector_output_move.log
