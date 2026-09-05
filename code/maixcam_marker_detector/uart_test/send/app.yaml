@@ -1,0 +1,12 @@
+id: maixcam_uart_vy_sender
+name: MaixCAM UART Vy Sender
+name[zh]: MaixCAM UART Vy 固定速度发送测试
+version: 0.1.0
+author: RoboMaster
+desc: Standalone AVC1 UART sender that continuously sends vy=+0.2 m/s to the chassis controller
+desc[zh]: 独立 AVC1 串口发送测试，持续向底盘控制器发送 vy=+0.2 m/s
+exclude:
+  - .git
+  - .vscode
+  - build
+  - dist
